@@ -45,8 +45,11 @@ public:
         , find_dialog_(std::make_unique<FindDialog>())
         , highlighter_(std::make_unique<SyntaxHighlighter>())
         , show_find_(false)
+        , show_replace_(false)
         , find_text_("")
+        , replace_text_("")
         , show_stats_(true)
+        , show_line_numbers_(true)
         , last_frame_time_(0)
         , current_file_("")
         , is_modified_(false)
@@ -66,25 +69,25 @@ public:
             "- Piece Table: O(1) insert/delete operations\n"
             "- Virtual Scrolling: Only renders visible lines\n"
             "- Native Win32: No web tech overhead\n"
-            "- Full mouse support with cursor positioning\n\n"
+            "- C++ Syntax Highlighting with token coloring\n\n"
             "Try typing - notice zero latency even with large files!\n\n"
             "Controls:\n"
             "  Type          - Insert text\n"
-            "  Mouse click   - Position cursor\n"
-            "  Mouse wheel   - Scroll viewport\n"
-            "  Backspace     - Delete character\n"
-            "  Arrow keys    - Scroll viewport\n"
-            "  Ctrl+O        - Open file\n"
-            "  Ctrl+S        - Save file\n"
+            "  Mouse drag    - Select text\n"
+            "  Ctrl+A        - Select all\n"
+            "  Ctrl+C/X/V    - Copy/Cut/Paste\n"
             "  Ctrl+Z/Ctrl+Y - Undo/Redo\n"
             "  Ctrl+F        - Find text\n"
+            "  Ctrl+H        - Replace text\n"
             "  F3/Shift+F3   - Find next/previous\n"
-            "  Ctrl+L        - Load 50,000 line demo file\n"
-            "  F1            - Toggle performance stats\n"
+            "  Ctrl+O        - Open file\n"
+            "  Ctrl+S        - Save file\n"
+            "  F1            - Toggle stats\n"
+            "  F2            - Toggle line numbers\n"
             "  ESC           - Quit\n\n"
             "Performance test:\n"
             "Press Ctrl+L to load a massive file and watch it stay at 60fps!\n"
-            "Or press Ctrl+O to open any text file from your computer.\n\n";
+            "Or press Ctrl+O to open any C++ file to see syntax highlighting.\n\n";
         
         document_ = std::make_shared<PieceTable>(welcome);
         viewport_.set_document(document_);
@@ -317,10 +320,14 @@ private:
         size_t line_num = viewport_.get_top_line();
         
         for (const auto& line : visible_lines) {
-            // Line number (gray)
-            SetTextColor(memDC, RGB(100, 100, 120));
-            std::wstring line_num_str = std::to_wstring(line_num + 1);
-            TextOutW(memDC, 10, y, line_num_str.c_str(), line_num_str.length());
+            // Line number (gray) - only if enabled
+            int text_x_offset = 10; // Default offset when line numbers are hidden
+            if (show_line_numbers_) {
+                SetTextColor(memDC, RGB(100, 100, 120));
+                std::wstring line_num_str = std::to_wstring(line_num + 1);
+                TextOutW(memDC, 10, y, line_num_str.c_str(), line_num_str.length());
+                text_x_offset = 80; // Offset for text when line numbers are shown
+            }
             
             // Calculate line position in document
             size_t line_start_pos = 0;
@@ -340,9 +347,9 @@ private:
                 if (has_selection_ && char_pos >= get_selection_start() && char_pos < get_selection_end()) {
                     // Draw selection background
                     RECT sel_rect = {
-                        static_cast<LONG>(80 + i * char_width_),
+                        static_cast<LONG>(text_x_offset + i * char_width_),
                         y,
-                        static_cast<LONG>(80 + (i + 1) * char_width_),
+                        static_cast<LONG>(text_x_offset + (i + 1) * char_width_),
                         y + char_height_
                     };
                     HBRUSH selBrush = CreateSolidBrush(RGB(60, 60, 120));
@@ -360,13 +367,13 @@ private:
                 if (token.start > last_pos) {
                     SetTextColor(memDC, RGB(220, 220, 220));
                     std::wstring segment = wline.substr(last_pos, token.start - last_pos);
-                    TextOutW(memDC, 80 + last_pos * char_width_, y, segment.c_str(), segment.length());
+                    TextOutW(memDC, text_x_offset + last_pos * char_width_, y, segment.c_str(), segment.length());
                 }
                 
                 // Render token with appropriate color
                 SetTextColor(memDC, token.get_color());
                 std::wstring segment = wline.substr(token.start, token.length);
-                TextOutW(memDC, 80 + token.start * char_width_, y, segment.c_str(), segment.length());
+                TextOutW(memDC, text_x_offset + token.start * char_width_, y, segment.c_str(), segment.length());
                 
                 last_pos = token.start + token.length;
             }
@@ -375,7 +382,7 @@ private:
             if (last_pos < wline.length()) {
                 SetTextColor(memDC, RGB(220, 220, 220));
                 std::wstring segment = wline.substr(last_pos);
-                TextOutW(memDC, 80 + last_pos * char_width_, y, segment.c_str(), segment.length());
+                TextOutW(memDC, text_x_offset + last_pos * char_width_, y, segment.c_str(), segment.length());
             }
             
             // Draw cursor if on this line
@@ -385,7 +392,7 @@ private:
                     HPEN cursorPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 0));
                     HPEN oldPen = (HPEN)SelectObject(memDC, cursorPen);
                     
-                    int cursor_x = 80 + cursor_col * char_width_;
+                    int cursor_x = text_x_offset + cursor_col * char_width_;
                     MoveToEx(memDC, cursor_x, y, nullptr);
                     LineTo(memDC, cursor_x, y + char_height_);
                     
@@ -436,6 +443,19 @@ private:
                 wfind += static_cast<wchar_t>(c);
             }
             stats << L"Find: " << wfind << L"\n";
+            if (find_dialog_->has_matches()) {
+                stats << L"Matches: " << (find_dialog_->get_current_match_index() + 1) 
+                      << L"/" << find_dialog_->get_match_count() << L"\n";
+            }
+        }
+        
+        if (show_replace_) {
+            std::wstring wfind;
+            for (char c : find_text_) {
+                wfind += static_cast<wchar_t>(c);
+            }
+            stats << L"Find: " << wfind << L"\n";
+            stats << L"Replace: [Ctrl+R]\n";
             if (find_dialog_->has_matches()) {
                 stats << L"Matches: " << (find_dialog_->get_current_match_index() + 1) 
                       << L"/" << find_dialog_->get_match_count() << L"\n";
@@ -499,6 +519,14 @@ private:
             return;
         }
         
+        // If replace mode is active, add to search string
+        if (show_replace_ && ch >= 32 && ch < 127) {
+            char c = static_cast<char>(ch);
+            find_text_ += c;
+            perform_find();
+            return;
+        }
+        
         if (ch >= 32 || ch == L'\r' || ch == L'\n' || ch == L'\t') {
             char c = static_cast<char>(ch);
             if (ch == L'\r') c = '\n';
@@ -521,7 +549,8 @@ private:
     
     void on_mouse_click(int x, int y) {
         // Convert screen coordinates to line/column
-        if (x < 80) return; // Clicked on line numbers
+        int text_offset = show_line_numbers_ ? 80 : 10;
+        if (x < text_offset) return; // Clicked on line numbers area or margin
         
         int line_index = (y - 10) / char_height_;
         size_t clicked_line = viewport_.get_top_line() + line_index;
@@ -531,7 +560,7 @@ private:
         }
         
         // Calculate column using actual character width
-        int col_index = (x - 80) / char_width_;
+        int col_index = (x - text_offset) / char_width_;
         if (col_index < 0) col_index = 0;
         
         // Get the line content to check bounds
@@ -568,7 +597,8 @@ private:
     
     void on_mouse_drag(int x, int y) {
         // Convert screen coordinates to position
-        if (x < 80) return;
+        int text_offset = show_line_numbers_ ? 80 : 10;
+        if (x < text_offset) return;
         
         int line_index = (y - 10) / char_height_;
         size_t clicked_line = viewport_.get_top_line() + line_index;
@@ -577,7 +607,7 @@ private:
             clicked_line = document_->get_line_count() > 0 ? document_->get_line_count() - 1 : 0;
         }
         
-        int col_index = (x - 80) / char_width_;
+        int col_index = (x - text_offset) / char_width_;
         if (col_index < 0) col_index = 0;
         
         std::string line = document_->get_line(clicked_line);
@@ -603,8 +633,8 @@ private:
             SendMessage(hwnd_, WM_CLOSE, 0, 0);
         }
         else if (key == VK_BACK) {
-            // If in find mode, delete from search string
-            if (show_find_ && !find_text_.empty()) {
+            // If in find or replace mode, delete from search string
+            if ((show_find_ || show_replace_) && !find_text_.empty()) {
                 find_text_.pop_back();
                 if (!find_text_.empty()) {
                     perform_find();
@@ -685,8 +715,19 @@ private:
         else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+F - Toggle find mode
             show_find_ = !show_find_;
+            show_replace_ = false;
             if (show_find_) {
                 find_text_.clear();
+                find_dialog_->clear_matches();
+            }
+        }
+        else if (key == L'H' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+H - Toggle replace mode
+            show_replace_ = !show_replace_;
+            show_find_ = false;
+            if (show_replace_) {
+                find_text_.clear();
+                replace_text_.clear();
                 find_dialog_->clear_matches();
             }
         }
@@ -711,6 +752,28 @@ private:
             // Ctrl+V - Paste
             paste_from_clipboard();
         }
+        else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+R - Replace current match (in replace mode)
+            if (show_replace_ && !find_text_.empty() && find_dialog_->has_matches()) {
+                auto* current_match = find_dialog_->get_current_match();
+                if (current_match) {
+                    // Delete the matched text
+                    auto cmd = std::make_unique<DeleteCommand>(document_.get(), 
+                                                               current_match->position, 
+                                                               current_match->length);
+                    undo_manager_->execute(std::move(cmd));
+                    cursor_pos_ = current_match->position;
+                    is_modified_ = true;
+                    update_title();
+                    
+                    // Re-search and find next match
+                    perform_find();
+                    if (find_dialog_->has_matches()) {
+                        find_next();
+                    }
+                }
+            }
+        }
         else if (key == VK_F3) {
             // F3 - Find next
             if (!find_text_.empty()) {
@@ -724,6 +787,9 @@ private:
         }
         else if (key == VK_F1) {
             show_stats_ = !show_stats_;
+        }
+        else if (key == VK_F2) {
+            show_line_numbers_ = !show_line_numbers_;
         }
         
         // Reset cursor blink on any key
@@ -1099,10 +1165,13 @@ private:
     std::unique_ptr<SyntaxHighlighter> highlighter_;
     
     bool show_find_;
+    bool show_replace_;
     std::string find_text_;
+    std::string replace_text_;
     
     size_t cursor_pos_ = 0;
     bool show_stats_;
+    bool show_line_numbers_;
     
     double fps_ = 60.0;
     double last_frame_time_;
