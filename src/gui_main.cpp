@@ -5,6 +5,7 @@
 #include "syntax_highlighter.h"
 #include "tab_manager.h"
 #include "file_tree.h"
+#include "workspace.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -185,10 +186,14 @@ public:
             // Load current working directory by default
             char cwd[MAX_PATH] = {0};
             GetCurrentDirectoryA(MAX_PATH, cwd);
+            current_workspace_dir_ = cwd;
             file_tree_.set_tree_control(tree_hwnd_);
             file_tree_.load_directory(std::string(cwd));
             file_tree_.populate_tree_view();
         }
+        
+        // Try to load workspace state from previous session
+        load_workspace_state();
         
         return true;
     }
@@ -502,6 +507,8 @@ private:
                         return 0; // Cancel close
                     }
                 }
+                // Save workspace state before closing
+                save_workspace_state();
                 DestroyWindow(hwnd_);
                 return 0;
                 
@@ -1234,6 +1241,10 @@ private:
         else if (key == L'L' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             load_large_demo_file();
         }
+        else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+R - Recent files dialog
+            show_recent_files_dialog();
+        }
         else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+F - Toggle find mode
             show_find_ = !show_find_;
@@ -1558,6 +1569,9 @@ private:
             current_file_ = narrow_filename;
             is_modified_ = false;
             
+            // Add to recent files
+            workspace_manager_.add_recent_file(narrow_filename);
+            
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             
@@ -1632,6 +1646,10 @@ private:
                 tab->is_modified = false;
             }
         }
+        
+        // Add to recent files
+        workspace_manager_.add_recent_file(filename);
+        
         update_title();
         InvalidateRect(hwnd_, nullptr, FALSE);
         
@@ -1845,6 +1863,169 @@ private:
         }
     }
     
+    // Workspace management functions
+    void save_workspace_state() {
+        if (current_workspace_dir_.empty()) {
+            // Use current working directory
+            char cwd[MAX_PATH] = {0};
+            GetCurrentDirectoryA(MAX_PATH, cwd);
+            current_workspace_dir_ = cwd;
+        }
+        
+        WorkspaceState state;
+        state.root_directory = current_workspace_dir_;
+        
+        // Save all open tabs
+        if (tab_manager_) {
+            const auto& tabs = tab_manager_->get_all_tabs();
+            for (size_t i = 0; i < tabs.size(); ++i) {
+                if (!tabs[i].file_path.empty()) {
+                    FileState fs;
+                    fs.path = tabs[i].file_path;
+                    fs.cursor_pos = tabs[i].cursor_pos;
+                    fs.scroll_offset = viewport_.get_top_line();
+                    state.open_files.push_back(fs);
+                }
+            }
+            state.active_tab_index = tab_manager_->get_active_tab_index();
+        }
+        
+        workspace_manager_.save_workspace(state, current_workspace_dir_);
+    }
+    
+    void load_workspace_state() {
+        if (current_workspace_dir_.empty()) {
+            // Use current working directory
+            char cwd[MAX_PATH] = {0};
+            GetCurrentDirectoryA(MAX_PATH, cwd);
+            current_workspace_dir_ = cwd;
+        }
+        
+        WorkspaceState state;
+        if (workspace_manager_.load_workspace(current_workspace_dir_, state)) {
+            // Close all tabs first
+            if (tab_manager_) {
+                tab_manager_->close_all_tabs();
+            }
+            
+            // Load each file into a tab
+            for (const auto& file_state : state.open_files) {
+                if (fs::exists(file_state.path)) {
+                    std::ifstream file(file_state.path, std::ios::binary);
+                    if (file) {
+                        std::string content((std::istreambuf_iterator<char>(file)),
+                                          std::istreambuf_iterator<char>());
+                        file.close();
+                        
+                        auto doc = std::make_shared<PieceTable>(content);
+                        if (tab_manager_) {
+                            tab_manager_->new_tab(content, file_state.path);
+                            if (auto* tab = tab_manager_->get_active_tab()) {
+                                tab->cursor_pos = file_state.cursor_pos;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Switch to the previously active tab
+            if (tab_manager_ && state.active_tab_index < tab_manager_->get_all_tabs().size()) {
+                switch_to_tab(state.active_tab_index);
+            }
+        }
+    }
+    
+    void show_recent_files_dialog() {
+        const auto& recent_files = workspace_manager_.get_recent_files();
+        
+        if (recent_files.empty()) {
+            MessageBoxW(hwnd_, L"No recent files", L"Recent Files", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        
+        // Create a simple listbox dialog
+        HWND dialog = CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+            L"STATIC",
+            L"Recent Files (Ctrl+R)",
+            WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU,
+            100, 100, 600, 400,
+            hwnd_, nullptr, hInstance_, nullptr
+        );
+        
+        if (!dialog) return;
+        
+        // Create listbox
+        HWND listbox = CreateWindowExW(
+            0,
+            L"LISTBOX",
+            L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_HASSTRINGS,
+            10, 10, 570, 340,
+            dialog, (HMENU)1001, hInstance_, nullptr
+        );
+        
+        // Set font
+        SendMessageW(listbox, WM_SETFONT, (WPARAM)hFont_, TRUE);
+        
+        // Populate with recent files
+        for (const auto& filepath : recent_files) {
+            wchar_t wpath[MAX_PATH];
+            MultiByteToWideChar(CP_UTF8, 0, filepath.c_str(), -1, wpath, MAX_PATH);
+            SendMessageW(listbox, LB_ADDSTRING, 0, (LPARAM)wpath);
+        }
+        
+        // Create OK and Cancel buttons
+        HWND btn_ok = CreateWindowExW(
+            0, L"BUTTON", L"Open",
+            WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+            400, 360, 80, 25,
+            dialog, (HMENU)IDOK, hInstance_, nullptr
+        );
+        
+        HWND btn_cancel = CreateWindowExW(
+            0, L"BUTTON", L"Cancel",
+            WS_CHILD | WS_VISIBLE,
+            490, 360, 80, 25,
+            dialog, (HMENU)IDCANCEL, hInstance_, nullptr
+        );
+        
+        SendMessageW(btn_ok, WM_SETFONT, (WPARAM)hFont_, TRUE);
+        SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)hFont_, TRUE);
+        
+        // Modal loop
+        MSG msg;
+        bool done = false;
+        int selected_index = -1;
+        
+        while (!done && GetMessage(&msg, nullptr, 0, 0)) {
+            if (msg.message == WM_COMMAND) {
+                if (LOWORD(msg.wParam) == IDOK) {
+                    selected_index = (int)SendMessageW(listbox, LB_GETCURSEL, 0, 0);
+                    done = true;
+                } else if (LOWORD(msg.wParam) == IDCANCEL) {
+                    done = true;
+                } else if (HIWORD(msg.wParam) == LBN_DBLCLK && LOWORD(msg.wParam) == 1001) {
+                    selected_index = (int)SendMessageW(listbox, LB_GETCURSEL, 0, 0);
+                    done = true;
+                }
+            } else if (msg.message == WM_CLOSE && msg.hwnd == dialog) {
+                done = true;
+            }
+            
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        
+        DestroyWindow(dialog);
+        
+        // Open the selected file
+        if (selected_index >= 0 && selected_index < (int)recent_files.size()) {
+            const std::string& filepath = recent_files[selected_index];
+            open_file_from_path(filepath);
+        }
+    }
+    
     HINSTANCE hInstance_;
     HWND hwnd_ = nullptr;
     HFONT hFont_ = nullptr;
@@ -1900,6 +2081,10 @@ private:
     // Multi-cursor support
     std::vector<size_t> extra_cursors_;  // Additional cursor positions
     bool multi_cursor_mode_ = false;
+    
+    // Workspace management
+    WorkspaceManager workspace_manager_;
+    std::string current_workspace_dir_;
 
     void setup_tree_image_list() {
         if (!tree_hwnd_) return;
@@ -1984,6 +2169,10 @@ private:
         if (!file) return;
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         file.close();
+        
+        // Add to recent files
+        workspace_manager_.add_recent_file(path);
+        
         if (tab_manager_) {
             size_t idx = tab_manager_->new_tab(content, path);
             switch_to_tab(idx);

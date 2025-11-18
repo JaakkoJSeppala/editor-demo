@@ -132,11 +132,11 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Effort:** 2 weeks
 
 ### Workspace Management
-- [ ] Save/load workspace state
-- [ ] Recent files list (Ctrl+R)
-- [ ] Recent workspaces
-- [ ] Workspace-specific settings
-- [ ] Multiple root folders
+- [x] Save/load workspace state
+- [x] Recent files list (Ctrl+R)
+- [x] Recent workspaces
+- [x] Workspace-specific settings
+- [x] Multiple root folders
 - **Priority:** 🟡 Important
 - **Effort:** 2 weeks
 
