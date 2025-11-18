@@ -141,12 +141,12 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Effort:** 2 weeks
 
 ### Project-Wide Search
-- [ ] Search in files (Ctrl+Shift+F)
-- [ ] Results panel with file grouping
-- [ ] Jump to result
-- [ ] Include/exclude patterns
-- [ ] Replace in files
-- [ ] Parallel file scanning
+- [x] Search in files (Ctrl+Shift+F)
+- [x] Results panel with file grouping
+- [x] Jump to result
+- [x] Include/exclude patterns
+- [x] Replace in files
+- [x] Parallel file scanning
 - **Priority:** 🟡 Important
 - **Effort:** 2 weeks
 

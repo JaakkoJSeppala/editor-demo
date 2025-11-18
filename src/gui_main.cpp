@@ -2,6 +2,7 @@
 #include "viewport.h"
 #include "undo_manager.h"
 #include "find_dialog.h"
+#include "workspace.h"
 #include "syntax_highlighter.h"
 #include "tab_manager.h"
 #include "file_tree.h"
@@ -14,6 +15,9 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <future>
+#include <mutex>
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <algorithm>
@@ -705,6 +709,11 @@ private:
             y += char_height_;
             line_num++;
         }
+
+        // Render project-wide search panel if visible
+        if (show_project_search_) {
+            render_project_search_panel(memDC, client_rect);
+        }
         
         // Render stats
         if (show_stats_) {
@@ -929,6 +938,278 @@ private:
         DeleteObject(smallFont);
     }
 
+    // --- Project-wide Search: helpers ---
+    static std::vector<std::string> split_patterns(const std::string& s) {
+        std::vector<std::string> out;
+        std::string cur;
+        for (char c : s) {
+            if (c == ';' || c == ',') {
+                if (!cur.empty()) out.push_back(cur);
+                cur.clear();
+            } else if (!(out.empty() && (c == ' ' || c == '\t'))) {
+                cur += c;
+            } else {
+                cur += c;
+            }
+        }
+        if (!cur.empty()) out.push_back(cur);
+        return out;
+    }
+
+    static bool wildcard_match_one(const char* pat, const char* str) {
+        // simple '*' and '?' matcher
+        const char* s = nullptr; const char* p = nullptr;
+        while (*str) {
+            if (*pat == '*') { p = ++pat; s = str; continue; }
+            if (*pat == '?' || *pat == *str) { ++pat; ++str; continue; }
+            if (p) { pat = p; str = ++s; continue; }
+            return false;
+        }
+        while (*pat == '*') ++pat;
+        return *pat == 0;
+    }
+
+    static bool wildcard_match(const std::string& pattern, const std::string& value) {
+        return wildcard_match_one(pattern.c_str(), value.c_str());
+    }
+
+    bool path_matches_includes_excludes(const std::string& path) {
+        auto includes = split_patterns(project_include_patterns_);
+        auto excludes = split_patterns(project_exclude_patterns_);
+        std::string lower_path = path;
+        std::transform(lower_path.begin(), lower_path.end(), lower_path.begin(), [](unsigned char c){ return (char)tolower(c); });
+        std::string filename;
+        size_t pos = lower_path.find_last_of("/\\");
+        filename = (pos == std::string::npos) ? lower_path : lower_path.substr(pos + 1);
+        // Excludes: substring or wildcard on full path or filename
+        for (auto& ex : excludes) {
+            std::string lex = ex; std::transform(lex.begin(), lex.end(), lex.begin(), ::tolower);
+            if (lex.find('*') != std::string::npos || lex.find('?') != std::string::npos) {
+                if (wildcard_match(lex, filename) || wildcard_match(lex, lower_path)) return false;
+            } else {
+                if (lower_path.find(lex) != std::string::npos) return false;
+            }
+        }
+        // Includes: if any include pattern matches filename
+        bool inc_ok = includes.empty();
+        for (auto& inc : includes) {
+            std::string linc = inc; std::transform(linc.begin(), linc.end(), linc.begin(), ::tolower);
+            if (wildcard_match(linc, filename) || wildcard_match(linc, lower_path)) { inc_ok = true; break; }
+        }
+        return inc_ok;
+    }
+
+    void start_project_search() {
+        if (project_search_in_progress_) return;
+        project_search_in_progress_ = true;
+        selected_result_index_ = -1;
+        {
+            std::lock_guard<std::mutex> lock(project_results_mutex_);
+            project_results_.clear();
+        }
+        std::string root = current_workspace_dir_.empty() ? std::string(".") : current_workspace_dir_;
+        std::string query = project_search_query_;
+        auto includes = project_include_patterns_;
+        auto excludes = project_exclude_patterns_;
+        project_search_future_ = std::async(std::launch::async, [this, root, query, includes, excludes]() {
+            std::vector<ProjectSearchResult> results;
+            std::vector<std::string> files;
+            try {
+                for (auto it = std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied); it != std::filesystem::recursive_directory_iterator(); ++it) {
+                    const auto& p = *it;
+                    if (!p.is_regular_file()) continue;
+                    std::string path = p.path().string();
+                    if (!path_matches_includes_excludes(path)) continue;
+                    files.push_back(path);
+                }
+            } catch (...) {}
+
+            // Parallel scan in batches
+            const size_t max_parallel = (std::max)(2u, std::thread::hardware_concurrency());
+            std::atomic<size_t> index{0};
+            auto worker = [&]() {
+                size_t i;
+                while ((i = index.fetch_add(1)) < files.size()) {
+                    const std::string& f = files[i];
+                    std::ifstream in(f, std::ios::binary);
+                    if (!in) continue;
+                    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    in.close();
+
+                    size_t start = 0;
+                    while (true) {
+                        size_t pos = content.find(query, start);
+                        if (pos == std::string::npos) break;
+                        // Compute line/column and extract line text
+                        size_t line = 0, col = 0, last_nl = 0;
+                        for (size_t k = 0; k < pos; ++k) if (content[k] == '\n') { line++; last_nl = k + 1; }
+                        col = pos - last_nl;
+                        size_t line_end = content.find('\n', pos);
+                        std::string line_text = content.substr(last_nl, (line_end == std::string::npos ? content.size() : line_end) - last_nl);
+                        ProjectSearchResult r{ f, line, col, line_text };
+                        {
+                            std::lock_guard<std::mutex> lock(project_results_mutex_);
+                            project_results_.push_back(std::move(r));
+                        }
+                        start = pos + (query.empty() ? 1 : query.size());
+                    }
+                }
+            };
+            std::vector<std::thread> threads;
+            for (size_t t = 0; t < max_parallel; ++t) threads.emplace_back(worker);
+            for (auto& th : threads) th.join();
+
+            project_search_in_progress_ = false;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        });
+    }
+
+    void open_result_at_index(int idx) {
+        std::lock_guard<std::mutex> lock(project_results_mutex_);
+        if (idx < 0 || idx >= (int)project_results_.size()) return;
+        const auto& r = project_results_[idx];
+        open_file_from_path(r.file_path);
+        // Move cursor to line/column
+        size_t pos = 0;
+        for (size_t i = 0; i < r.line; ++i) pos += document_->get_line(i).length() + 1;
+        pos += (std::min)(r.column, document_->get_line(r.line).length());
+        cursor_pos_ = pos;
+        viewport_.scroll_to_line(r.line);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    void replace_in_files() {
+        std::string find = project_search_query_;
+        std::string repl = project_replace_query_;
+        if (find.empty()) return;
+        size_t replaced_total = 0;
+        std::vector<std::string> touched_files;
+
+        // Gather distinct files from results
+        {
+            std::lock_guard<std::mutex> lock(project_results_mutex_);
+            std::vector<std::string> files;
+            for (const auto& r : project_results_) files.push_back(r.file_path);
+            std::sort(files.begin(), files.end());
+            files.erase(std::unique(files.begin(), files.end()), files.end());
+            for (const auto& f : files) {
+                std::ifstream in(f, std::ios::binary);
+                if (!in) continue;
+                std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                in.close();
+                size_t count = 0, pos = 0;
+                while ((pos = content.find(find, pos)) != std::string::npos) {
+                    content.replace(pos, find.size(), repl);
+                    pos += repl.size();
+                    ++count;
+                }
+                if (count > 0) {
+                    std::ofstream out(f, std::ios::binary | std::ios::trunc);
+                    if (out) { out.write(content.data(), content.size()); out.close(); }
+                    replaced_total += count;
+                    touched_files.push_back(f);
+                }
+            }
+        }
+        // Re-run search to refresh results
+        start_project_search();
+        // Status message
+        std::wostringstream msg;
+        msg << L"Replaced " << replaced_total << L" occurrences in " << touched_files.size() << L" files";
+        show_status_message(msg.str(), 3000);
+    }
+
+    void render_project_search_panel(HDC hdc, const RECT& client_rect) {
+        RECT panel{ 10, client_rect.bottom - results_panel_height_, client_rect.right - 10, client_rect.bottom - 10 };
+        HBRUSH bg = CreateSolidBrush(RGB(24, 24, 30));
+        FillRect(hdc, &panel, bg); DeleteObject(bg);
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(80, 80, 100));
+        HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+        HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Rectangle(hdc, panel.left, panel.top, panel.right, panel.bottom);
+        SelectObject(hdc, oldPen); DeleteObject(pen); SelectObject(hdc, oldBrush);
+
+        SetTextColor(hdc, RGB(200, 200, 220));
+        HFONT smallFont = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+        HFONT oldFont = (HFONT)SelectObject(hdc, smallFont);
+
+        int x = panel.left + 10; int y = panel.top + 10;
+        auto draw_label = [&](const wchar_t* w, int& yy){ RECT r{ x, yy, panel.right - 10, yy + 18 }; DrawTextW(hdc, w, -1, &r, DT_LEFT | DT_TOP); yy += 18; };
+        auto draw_input = [&](const std::string& s, bool focused, int& yy){
+            RECT r{ x, yy, panel.right - 10, yy + 22 };
+            HBRUSH ib = CreateSolidBrush(focused ? RGB(40, 40, 60) : RGB(30, 30, 40));
+            FillRect(hdc, &r, ib); DeleteObject(ib);
+            std::wstring ws; for (char c : s) ws += (wchar_t)c;
+            r.left += 6; DrawTextW(hdc, ws.c_str(), -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            yy += 26;
+        };
+
+        draw_label(L"Project Search (Ctrl+Shift+F) — Enter: Search, Ctrl+Shift+R: Replace in Files", y);
+        draw_label(L"Query:", y);      draw_input(project_search_query_,   project_search_focus_==0, y);
+        draw_label(L"Replace:", y);    draw_input(project_replace_query_,  project_search_focus_==1, y);
+        draw_label(L"Include:", y);    draw_input(project_include_patterns_, project_search_focus_==2, y);
+        draw_label(L"Exclude:", y);    draw_input(project_exclude_patterns_, project_search_focus_==3, y);
+
+        // Results area header
+        int results_top = y + 4;
+        RECT sep{ panel.left + 4, results_top, panel.right - 4, results_top + 1 };
+        HBRUSH sb = CreateSolidBrush(RGB(60, 60, 80)); FillRect(hdc, &sep, sb); DeleteObject(sb);
+
+        // Results info
+        std::wstring info;
+        if (project_search_in_progress_) info = L"Searching...";
+        else {
+            std::lock_guard<std::mutex> lock(project_results_mutex_);
+            info = L"Results: "; info += std::to_wstring(project_results_.size());
+        }
+        RECT ir{ panel.left + 8, results_top + 6, panel.right - 10, results_top + 28 };
+        DrawTextW(hdc, info.c_str(), -1, &ir, DT_LEFT | DT_TOP);
+
+        // Results list grouped by file
+        int list_top = results_top + 28;
+        int row_h = char_height_ + 4;
+        result_rows_layout_.clear();
+        int draw_y = list_top;
+        {
+            std::lock_guard<std::mutex> lock(project_results_mutex_);
+            // Group by file
+            std::map<std::string, std::vector<int>> groups;
+            for (int i = 0; i < (int)project_results_.size(); ++i) {
+                groups[project_results_[i].file_path].push_back(i);
+            }
+            for (auto& kv : groups) {
+                // Header
+                std::wstring wfile; for (char c : kv.first) wfile += (wchar_t)c;
+                SetTextColor(hdc, RGB(160, 200, 255));
+                RECT hr{ panel.left + 8, draw_y, panel.right - 10, draw_y + row_h };
+                DrawTextW(hdc, wfile.c_str(), -1, &hr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                result_rows_layout_.push_back(ResultRow{ true, kv.first, -1 });
+                draw_y += row_h;
+                // Items
+                SetTextColor(hdc, RGB(220, 220, 220));
+                for (int idx : kv.second) {
+                    const auto& r = project_results_[idx];
+                    std::wostringstream line;
+                    line << (r.line + 1) << L":" << (r.column + 1) << L"  ";
+                    std::wstring wline; for (char c : r.line_text) wline += (wchar_t)c;
+                    std::wstring ws = line.str() + wline;
+                    RECT rr{ panel.left + 26, draw_y, panel.right - 10, draw_y + row_h };
+                    if (idx == selected_result_index_) {
+                        HBRUSH sel = CreateSolidBrush(RGB(50, 70, 110)); FillRect(hdc, &rr, sel); DeleteObject(sel);
+                    }
+                    DrawTextW(hdc, ws.c_str(), -1, &rr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                    result_rows_layout_.push_back(ResultRow{ false, kv.first, idx });
+                    draw_y += row_h;
+                    if (draw_y > panel.bottom - 8) break; // clip
+                }
+                if (draw_y > panel.bottom - 8) break;
+            }
+        }
+        SelectObject(hdc, oldFont); DeleteObject(smallFont);
+    }
+
     void mark_active_tab_modified() {
         if (tab_manager_) {
             if (auto* tab = tab_manager_->get_active_tab()) {
@@ -938,6 +1219,30 @@ private:
     }
     
     void on_char(wchar_t ch) {
+        // Project-wide search text input and field navigation
+        if (show_project_search_) {
+            if (ch == L'\t') {
+                project_search_focus_ = (project_search_focus_ + 1) % 5;
+                return;
+            }
+            if (ch == L'\r') { // Enter triggers search
+                if (!project_search_query_.empty() && !project_search_in_progress_) {
+                    start_project_search();
+                }
+                return;
+            }
+            if (ch >= 32 && ch < 127) {
+                char c = static_cast<char>(ch);
+                switch (project_search_focus_) {
+                    case 0: project_search_query_ += c; break;
+                    case 1: project_replace_query_ += c; break;
+                    case 2: project_include_patterns_ += c; break;
+                    case 3: project_exclude_patterns_ += c; break;
+                    default: break;
+                }
+                return;
+            }
+        }
         // If find mode is active, add to search string
         if (show_find_ && ch >= 32 && ch < 127) {
             char c = static_cast<char>(ch);
@@ -1008,6 +1313,28 @@ private:
     }
     
     void on_mouse_click(int x, int y) {
+        // Clicks inside project search results panel
+        if (show_project_search_) {
+            RECT client_rect; GetClientRect(hwnd_, &client_rect);
+            int panel_top = client_rect.bottom - results_panel_height_;
+            if (y >= panel_top) {
+                int row_height = char_height_ + 4;
+                int content_top = panel_top + 40; // header area has inputs
+                if (y >= content_top) {
+                    int rel_y = y - content_top;
+                    int row_index = rel_y / row_height;
+                    if (row_index >= 0 && row_index < (int)result_rows_layout_.size()) {
+                        const auto& row = result_rows_layout_[row_index];
+                        if (!row.is_header && row.result_index >= 0) {
+                            selected_result_index_ = row.result_index;
+                            open_result_at_index(selected_result_index_);
+                        }
+                        InvalidateRect(hwnd_, nullptr, FALSE);
+                        return;
+                    }
+                }
+            }
+        }
         // Handle tab clicks first
         int tabs_top = 10;
         int tabs_bottom = tabs_top + (show_tabs_ ? tab_bar_height_ : 0);
@@ -1119,7 +1446,10 @@ private:
     
     void on_key_down(WPARAM key) {
         if (key == VK_ESCAPE) {
-            if (show_find_) {
+            if (show_project_search_) {
+                show_project_search_ = false;
+                return;
+            } else if (show_find_) {
                 show_find_ = false;
                 find_text_ = "";
                 find_dialog_->clear_matches();
@@ -1137,6 +1467,19 @@ private:
             }
         }
         else if (key == VK_BACK) {
+            // If project search is active, backspace edits the active field
+            if (show_project_search_) {
+                std::string* target = nullptr;
+                switch (project_search_focus_) {
+                    case 0: target = &project_search_query_; break;
+                    case 1: target = &project_replace_query_; break;
+                    case 2: target = &project_include_patterns_; break;
+                    case 3: target = &project_exclude_patterns_; break;
+                    default: break;
+                }
+                if (target && !target->empty()) target->pop_back();
+                return;
+            }
             // If in find mode, delete from search string
             if (show_find_) {
                 if (!find_text_.empty()) {
@@ -1232,6 +1575,18 @@ private:
         else if (key == VK_END) {
             cursor_pos_ = document_->get_total_length();
         }
+        else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+F - Toggle Project-wide Search panel
+            show_project_search_ = !show_project_search_;
+            if (show_project_search_) {
+                // Hide other overlays
+                show_find_ = false;
+                show_replace_ = false;
+                project_search_focus_ = 0;
+                selected_result_index_ = -1;
+            }
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
         else if (key == L'O' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             open_file();
         }
@@ -1247,7 +1602,9 @@ private:
         }
         else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+F - Toggle find mode
-            show_find_ = !show_find_;
+            if (!show_project_search_) {
+                show_find_ = !show_find_;
+            }
             show_replace_ = false;
             if (show_find_) {
                 find_text_.clear();
@@ -2085,6 +2442,34 @@ private:
     // Workspace management
     WorkspaceManager workspace_manager_;
     std::string current_workspace_dir_;
+
+    // Project-wide search
+    struct ProjectSearchResult {
+        std::string file_path;
+        size_t line = 0;     // 0-based
+        size_t column = 0;   // 0-based
+        std::string line_text;
+    };
+
+    bool show_project_search_ = false;
+    std::string project_search_query_;
+    std::string project_replace_query_;
+    std::string project_include_patterns_ = "*.cpp;*.hpp;*.h;*.c;*.txt;*.md";
+    std::string project_exclude_patterns_ = ".git;build;node_modules;*.exe;*.dll;*.obj;*.pdb";
+    int project_search_focus_ = 0; // 0=query,1=replace,2=include,3=exclude,4=results
+    int results_panel_height_ = 260;
+    std::atomic<bool> project_search_in_progress_{false};
+    std::future<void> project_search_future_;
+    std::vector<ProjectSearchResult> project_results_;
+    std::mutex project_results_mutex_;
+    int selected_result_index_ = -1;
+
+    struct ResultRow { // layout helper for click mapping
+        bool is_header = false;
+        std::string file_path;
+        int result_index = -1; // index into project_results_ if not header
+    };
+    std::vector<ResultRow> result_rows_layout_;
 
     void setup_tree_image_list() {
         if (!tree_hwnd_) return;
