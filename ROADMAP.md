@@ -555,7 +555,6 @@ This roadmap is a living document. We welcome feedback:
 
 - 💬 [GitHub Discussions](https://github.com/yourusername/velocity-editor/discussions)
 - 🐛 [Issue Tracker](https://github.com/yourusername/velocity-editor/issues)
-- 📧 Email: roadmap@velocity-editor.dev
 
 **Last Updated:** November 18, 2025  
 **Next Review:** Q1 2026
