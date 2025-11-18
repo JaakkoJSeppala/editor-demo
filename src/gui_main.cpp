@@ -79,6 +79,11 @@ public:
         , drag_tab_index_(static_cast<size_t>(-1))
         , hover_tab_index_(static_cast<size_t>(-1))
         , tab_scroll_offset_(0)
+        , split_mode_(SplitMode::None)
+        , active_pane_(0)
+        , splitter_pos_(0)
+        , dragging_splitter_(false)
+        , sync_scrolling_(false)
     {
         // Initialize with welcome text
         std::string welcome = 
@@ -234,6 +239,10 @@ public:
     }
 
 private:
+    // Forward declarations
+    struct SplitPane;
+    enum class SplitMode;
+    
     // Tabs
     std::unique_ptr<TabManager> tab_manager_;
     bool show_tabs_ = false;
@@ -246,6 +255,198 @@ private:
     void show_status_message(const std::wstring& msg, int duration_ms) {
         status_message_ = msg;
         status_message_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms);
+    }
+
+    // Split view helper functions
+    void split_horizontal() {
+        if (split_mode_ != SplitMode::None) return;  // Already split
+        
+        RECT client_rect;
+        GetClientRect(hwnd_, &client_rect);
+        int content_height = client_rect.bottom - get_content_top();
+        
+        split_mode_ = SplitMode::Horizontal;
+        splitter_pos_ = content_height / 2;  // Middle position
+        
+        // Copy current state to pane1
+        pane1_.document = document_;
+        pane1_.viewport.set_document(document_);
+        pane1_.cursor_pos = cursor_pos_;
+        pane1_.has_selection = has_selection_;
+        pane1_.selection_start = selection_start_;
+        pane1_.selection_end = selection_end_;
+        pane1_.file_path = current_file_;
+        pane1_.is_modified = is_modified_;
+        pane1_.extra_cursors = extra_cursors_;
+        
+        // Initialize pane2 with same content (or blank)
+        pane2_.document = std::make_shared<PieceTable>(document_->get_text(0, document_->get_total_length()));
+        pane2_.viewport.set_document(pane2_.document);
+        pane2_.cursor_pos = 0;
+        pane2_.has_selection = false;
+        pane2_.file_path = current_file_;
+        pane2_.is_modified = false;
+        
+        active_pane_ = 0;
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+    
+    void split_vertical() {
+        if (split_mode_ != SplitMode::None) return;  // Already split
+        
+        RECT client_rect;
+        GetClientRect(hwnd_, &client_rect);
+        int content_width = client_rect.right - get_content_left();
+        
+        split_mode_ = SplitMode::Vertical;
+        splitter_pos_ = content_width / 2;  // Middle position
+        
+        // Copy current state to pane1
+        pane1_.document = document_;
+        pane1_.viewport.set_document(document_);
+        pane1_.cursor_pos = cursor_pos_;
+        pane1_.has_selection = has_selection_;
+        pane1_.selection_start = selection_start_;
+        pane1_.selection_end = selection_end_;
+        pane1_.file_path = current_file_;
+        pane1_.is_modified = is_modified_;
+        pane1_.extra_cursors = extra_cursors_;
+        
+        // Initialize pane2 with same content (or blank)
+        pane2_.document = std::make_shared<PieceTable>(document_->get_text(0, document_->get_total_length()));
+        pane2_.viewport.set_document(pane2_.document);
+        pane2_.cursor_pos = 0;
+        pane2_.has_selection = false;
+        pane2_.file_path = current_file_;
+        pane2_.is_modified = false;
+        
+        active_pane_ = 0;
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+    
+    void close_split() {
+        if (split_mode_ == SplitMode::None) return;  // Not split
+        
+        // Restore state from active pane
+        auto& active = (active_pane_ == 0) ? pane1_ : pane2_;
+        document_ = active.document;
+        viewport_.set_document(document_);
+        cursor_pos_ = active.cursor_pos;
+        has_selection_ = active.has_selection;
+        selection_start_ = active.selection_start;
+        selection_end_ = active.selection_end;
+        current_file_ = active.file_path;
+        is_modified_ = active.is_modified;
+        extra_cursors_ = active.extra_cursors;
+        
+        split_mode_ = SplitMode::None;
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+    
+    void toggle_sync_scrolling() {
+        sync_scrolling_ = !sync_scrolling_;
+        std::wstring msg = sync_scrolling_ ? L"Synchronized scrolling: ON" : L"Synchronized scrolling: OFF";
+        show_status_message(msg, 2000);
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+    
+    RECT get_pane_rect(int pane_index) {
+        RECT client_rect;
+        GetClientRect(hwnd_, &client_rect);
+        int content_top = get_content_top();
+        int content_left = get_content_left();
+        
+        if (split_mode_ == SplitMode::Horizontal) {
+            if (pane_index == 0) {
+                return RECT{ content_left, content_top, client_rect.right, content_top + splitter_pos_ - 2 };
+            } else {
+                return RECT{ content_left, content_top + splitter_pos_ + 2, client_rect.right, client_rect.bottom };
+            }
+        } else if (split_mode_ == SplitMode::Vertical) {
+            if (pane_index == 0) {
+                return RECT{ content_left, content_top, content_left + splitter_pos_ - 2, client_rect.bottom };
+            } else {
+                return RECT{ content_left + splitter_pos_ + 2, content_top, client_rect.right, client_rect.bottom };
+            }
+        }
+        
+        return client_rect;
+    }
+    
+    RECT get_splitter_rect() {
+        RECT client_rect;
+        GetClientRect(hwnd_, &client_rect);
+        int content_top = get_content_top();
+        int content_left = get_content_left();
+        
+        if (split_mode_ == SplitMode::Horizontal) {
+            return RECT{ content_left, content_top + splitter_pos_ - 2, client_rect.right, content_top + splitter_pos_ + 2 };
+        } else if (split_mode_ == SplitMode::Vertical) {
+            return RECT{ content_left + splitter_pos_ - 2, content_top, content_left + splitter_pos_ + 2, client_rect.bottom };
+        }
+        
+        return RECT{0, 0, 0, 0};
+    }
+    
+    bool is_point_in_splitter(int x, int y) {
+        if (split_mode_ == SplitMode::None) return false;
+        RECT splitter = get_splitter_rect();
+        return x >= splitter.left && x <= splitter.right && y >= splitter.top && y <= splitter.bottom;
+    }
+    
+    int get_pane_at_point(int x, int y) {
+        if (split_mode_ == SplitMode::None) return 0;
+        
+        RECT pane1_rect = get_pane_rect(0);
+        if (x >= pane1_rect.left && x <= pane1_rect.right && y >= pane1_rect.top && y <= pane1_rect.bottom) {
+            return 0;
+        }
+        
+        RECT pane2_rect = get_pane_rect(1);
+        if (x >= pane2_rect.left && x <= pane2_rect.right && y >= pane2_rect.top && y <= pane2_rect.bottom) {
+            return 1;
+        }
+        
+        return active_pane_;
+    }
+    
+    void scroll_view_up(int lines) {
+        if (split_mode_ != SplitMode::None) {
+            auto& pane = (active_pane_ == 0) ? pane1_ : pane2_;
+            pane.viewport.scroll_up(lines);
+            if (sync_scrolling_) {
+                auto& other = (active_pane_ == 0) ? pane2_ : pane1_;
+                other.viewport.scroll_up(lines);
+            }
+        } else {
+            viewport_.scroll_up(lines);
+        }
+    }
+    
+    void scroll_view_down(int lines) {
+        if (split_mode_ != SplitMode::None) {
+            auto& pane = (active_pane_ == 0) ? pane1_ : pane2_;
+            pane.viewport.scroll_down(lines);
+            if (sync_scrolling_) {
+                auto& other = (active_pane_ == 0) ? pane2_ : pane1_;
+                other.viewport.scroll_down(lines);
+            }
+        } else {
+            viewport_.scroll_down(lines);
+        }
+    }
+    
+    void scroll_to_line(size_t line) {
+        if (split_mode_ != SplitMode::None) {
+            auto& pane = (active_pane_ == 0) ? pane1_ : pane2_;
+            pane.viewport.scroll_to_line(line);
+            if (sync_scrolling_) {
+                auto& other = (active_pane_ == 0) ? pane2_ : pane1_;
+                other.viewport.scroll_to_line(line);
+            }
+        } else {
+            viewport_.scroll_to_line(line);
+        }
     }
 
     static LRESULT CALLBACK window_proc_static(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -351,6 +552,15 @@ private:
                 int mx = LOWORD(lParam), my = HIWORD(lParam);
                 int tabs_top = 10;
                 int tabs_bottom = tabs_top + (show_tabs_ ? tab_bar_height_ : 0);
+                
+                // Check if clicking on splitter
+                if (split_mode_ != SplitMode::None && is_point_in_splitter(mx, my)) {
+                    dragging_splitter_ = true;
+                    SetCapture(hwnd_);
+                    return 0;
+                }
+                
+                // Check for tab click
                 if (show_tabs_ && my >= tabs_top && my <= tabs_bottom) {
                     // Check for tab under cursor to start drag
                     for (size_t i = 0; i < tab_rects_.size(); ++i) {
@@ -364,6 +574,16 @@ private:
                         }
                     }
                 }
+                
+                // Switch active pane if in split mode
+                if (split_mode_ != SplitMode::None) {
+                    int pane = get_pane_at_point(mx, my);
+                    if (pane != active_pane_) {
+                        active_pane_ = pane;
+                        InvalidateRect(hwnd_, nullptr, FALSE);
+                    }
+                }
+                
                 on_mouse_click(mx, my);
                 SetCapture(hwnd_); // Capture mouse for text dragging
                 InvalidateRect(hwnd_, nullptr, FALSE);
@@ -371,7 +591,13 @@ private:
             }
                 
             case WM_LBUTTONUP:
-                if (dragging_tab_) {
+                if (dragging_splitter_) {
+                    dragging_splitter_ = false;
+                    ReleaseCapture();
+                    InvalidateRect(hwnd_, nullptr, TRUE);
+                    return 0;
+                }
+                else if (dragging_tab_) {
                     int mx = LOWORD(lParam), my = HIWORD(lParam);
                     size_t target = drag_tab_index_;
                     for (size_t i = 0; i < tab_rects_.size(); ++i) {
@@ -421,7 +647,25 @@ private:
                 }
                 
             case WM_MOUSEMOVE:
-                if (dragging_tree_) {
+                if (dragging_splitter_) {
+                    int mx = LOWORD(lParam), my = HIWORD(lParam);
+                    RECT client_rect;
+                    GetClientRect(hwnd_, &client_rect);
+                    int content_top = get_content_top();
+                    int content_left = get_content_left();
+                    
+                    if (split_mode_ == SplitMode::Horizontal) {
+                        int max_pos = client_rect.bottom - content_top - 50;
+                        splitter_pos_ = (std::max)(50, (std::min)(my - content_top, max_pos));
+                    } else if (split_mode_ == SplitMode::Vertical) {
+                        int max_pos = client_rect.right - content_left - 50;
+                        splitter_pos_ = (std::max)(50, (std::min)(mx - content_left, max_pos));
+                    }
+                    
+                    InvalidateRect(hwnd_, nullptr, TRUE);
+                    return 0;
+                }
+                else if (dragging_tree_) {
                     POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                     ClientToScreen(hwnd_, &pt);
                     ImageList_DragMove(pt.x, pt.y);
@@ -550,6 +794,40 @@ private:
         // Render tab bar (if enabled)
         render_tabs(memDC, client_rect);
 
+        // Render split views or single view
+        if (split_mode_ != SplitMode::None) {
+            // Render two panes with splitter
+            RECT pane1_rect = get_pane_rect(0);
+            RECT pane2_rect = get_pane_rect(1);
+            RECT splitter_rect = get_splitter_rect();
+            
+            // Render pane 1
+            render_pane(memDC, pane1_rect, pane1_, active_pane_ == 0);
+            
+            // Render pane 2
+            render_pane(memDC, pane2_rect, pane2_, active_pane_ == 1);
+            
+            // Render splitter
+            HBRUSH splitterBrush = CreateSolidBrush(RGB(60, 60, 70));
+            FillRect(memDC, &splitter_rect, splitterBrush);
+            DeleteObject(splitterBrush);
+            
+            // Splitter drag handle indicator
+            HPEN splitterPen = CreatePen(PS_SOLID, 1, RGB(100, 100, 120));
+            HPEN oldPen = (HPEN)SelectObject(memDC, splitterPen);
+            if (split_mode_ == SplitMode::Horizontal) {
+                int mid_x = (splitter_rect.left + splitter_rect.right) / 2;
+                MoveToEx(memDC, mid_x - 15, splitter_rect.top + 1, nullptr);
+                LineTo(memDC, mid_x + 15, splitter_rect.top + 1);
+            } else {
+                int mid_y = (splitter_rect.top + splitter_rect.bottom) / 2;
+                MoveToEx(memDC, splitter_rect.left + 1, mid_y - 15, nullptr);
+                LineTo(memDC, splitter_rect.left + 1, mid_y + 15);
+            }
+            SelectObject(memDC, oldPen);
+            DeleteObject(splitterPen);
+        } else {
+            // Original single-view rendering
         // Render text lines
         auto visible_lines = viewport_.get_visible_lines();
         int y = get_content_top();
@@ -709,6 +987,7 @@ private:
             y += char_height_;
             line_num++;
         }
+        }  // End of split_mode_ == None
 
         // Render project-wide search panel if visible
         if (show_project_search_) {
@@ -1117,6 +1396,159 @@ private:
         std::wostringstream msg;
         msg << L"Replaced " << replaced_total << L" occurrences in " << touched_files.size() << L" files";
         show_status_message(msg.str(), 3000);
+    }
+
+    void render_pane(HDC memDC, const RECT& pane_rect, SplitPane& pane, bool is_active) {
+        // Clip rendering to pane bounds
+        HRGN clipRegion = CreateRectRgnIndirect(&pane_rect);
+        SelectClipRgn(memDC, clipRegion);
+        
+        auto& doc = pane.document;
+        auto& vp = pane.viewport;
+        
+        auto visible_lines = vp.get_visible_lines();
+        int y = pane_rect.top;
+        size_t line_num = vp.get_top_line();
+        
+        // Calculate current line from cursor position
+        size_t current_line = 0;
+        size_t pos_counter = 0;
+        for (size_t i = 0; i < doc->get_line_count(); ++i) {
+            size_t line_len = doc->get_line(i).length() + 1;
+            if (pane.cursor_pos < pos_counter + line_len) {
+                current_line = i;
+                break;
+            }
+            pos_counter += line_len;
+        }
+        
+        int text_x_offset = pane_rect.left;
+        if (show_line_numbers_) {
+            text_x_offset += 70;
+        }
+        
+        for (const auto& line : visible_lines) {
+            // Line numbers
+            if (show_line_numbers_) {
+                std::wstring line_num_str;
+                if (relative_line_numbers_) {
+                    if (line_num == current_line) {
+                        line_num_str = std::to_wstring(line_num + 1);
+                    } else {
+                        size_t diff = (line_num > current_line) ? (line_num - current_line) : (current_line - line_num);
+                        line_num_str = std::to_wstring(diff);
+                    }
+                } else {
+                    line_num_str = std::to_wstring(line_num + 1);
+                }
+                
+                RECT gutter_rect{ pane_rect.left, y, pane_rect.left + 70, y + char_height_ };
+                HBRUSH gutterBrush = CreateSolidBrush(RGB(35, 35, 45));
+                FillRect(memDC, &gutter_rect, gutterBrush);
+                DeleteObject(gutterBrush);
+                
+                SIZE num_sz{};
+                GetTextExtentPoint32W(memDC, line_num_str.c_str(), (int)line_num_str.length(), &num_sz);
+                int num_x = pane_rect.left + 70 - num_sz.cx - 4;
+                SetTextColor(memDC, RGB(100, 100, 120));
+                TextOutW(memDC, num_x, y, line_num_str.c_str(), (int)line_num_str.length());
+            }
+            
+            // Current line highlighting
+            if (is_active && line_num == current_line) {
+                RECT hl_rect{ text_x_offset, y, pane_rect.right - 10, y + char_height_ };
+                HBRUSH hlBrush = CreateSolidBrush(RGB(45, 45, 60));
+                FillRect(memDC, &hl_rect, hlBrush);
+                DeleteObject(hlBrush);
+            }
+            
+            // Calculate line position
+            size_t line_start_pos = 0;
+            for (size_t i = 0; i < line_num; ++i) {
+                line_start_pos += doc->get_line(i).length() + 1;
+            }
+            
+            // Tokenize and render
+            auto tokens = highlighter_->tokenize_line(line);
+            std::wstring wline;
+            for (size_t i = 0; i < line.length(); ++i) {
+                size_t char_pos = line_start_pos + i;
+                
+                // Selection highlighting
+                if (pane.has_selection && char_pos >= (std::min)(pane.selection_start, pane.selection_end) && 
+                    char_pos < (std::max)(pane.selection_start, pane.selection_end)) {
+                    RECT sel_rect = {
+                        static_cast<LONG>(text_x_offset + i * char_width_),
+                        y,
+                        static_cast<LONG>(text_x_offset + (i + 1) * char_width_),
+                        y + char_height_
+                    };
+                    HBRUSH selBrush = CreateSolidBrush(RGB(60, 60, 120));
+                    FillRect(memDC, &sel_rect, selBrush);
+                    DeleteObject(selBrush);
+                }
+                
+                wline += static_cast<wchar_t>(line[i]);
+            }
+            
+            // Render with syntax highlighting
+            size_t last_pos = 0;
+            for (const auto& token : tokens) {
+                if (token.start > last_pos) {
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    std::wstring segment = wline.substr(last_pos, token.start - last_pos);
+                    TextOutW(memDC, text_x_offset + last_pos * char_width_, y, segment.c_str(), segment.length());
+                }
+                
+                SetTextColor(memDC, token.get_color());
+                std::wstring segment = wline.substr(token.start, token.length);
+                TextOutW(memDC, text_x_offset + token.start * char_width_, y, segment.c_str(), segment.length());
+                
+                last_pos = token.start + token.length;
+            }
+            
+            if (last_pos < wline.length()) {
+                SetTextColor(memDC, RGB(220, 220, 220));
+                std::wstring segment = wline.substr(last_pos);
+                TextOutW(memDC, text_x_offset + last_pos * char_width_, y, segment.c_str(), segment.length());
+            }
+            
+            // Draw cursor if active pane
+            if (cursor_visible_ && is_active && line_num == current_line) {
+                size_t cursor_col = pane.cursor_pos - line_start_pos;
+                if (cursor_col <= line.length()) {
+                    HPEN cursorPen = CreatePen(PS_SOLID, 2, RGB(255, 255, 0));
+                    HPEN oldPen = (HPEN)SelectObject(memDC, cursorPen);
+                    
+                    int cursor_x = text_x_offset + cursor_col * char_width_;
+                    MoveToEx(memDC, cursor_x, y, nullptr);
+                    LineTo(memDC, cursor_x, y + char_height_);
+                    
+                    SelectObject(memDC, oldPen);
+                    DeleteObject(cursorPen);
+                }
+            }
+            
+            y += char_height_;
+            line_num++;
+            
+            if (y >= pane_rect.bottom) break;
+        }
+        
+        // Draw active pane indicator border
+        if (is_active) {
+            HPEN activePen = CreatePen(PS_SOLID, 2, RGB(80, 160, 255));
+            HPEN oldPen = (HPEN)SelectObject(memDC, activePen);
+            HBRUSH oldBrush = (HBRUSH)SelectObject(memDC, GetStockObject(NULL_BRUSH));
+            Rectangle(memDC, pane_rect.left, pane_rect.top, pane_rect.right, pane_rect.bottom);
+            SelectObject(memDC, oldPen);
+            SelectObject(memDC, oldBrush);
+            DeleteObject(activePen);
+        }
+        
+        // Reset clip region
+        SelectClipRgn(memDC, nullptr);
+        DeleteObject(clipRegion);
     }
 
     void render_project_search_panel(HDC hdc, const RECT& client_rect) {
@@ -1557,20 +1989,20 @@ private:
             if (cursor_pos_ < document_->get_total_length()) cursor_pos_++;
         }
         else if (key == VK_UP) {
-            viewport_.scroll_up(1);
+            scroll_view_up(1);
         }
         else if (key == VK_DOWN) {
-            viewport_.scroll_down(1);
+            scroll_view_down(1);
         }
         else if (key == VK_PRIOR) { // Page Up
-            viewport_.scroll_up(10);
+            scroll_view_up(10);
         }
         else if (key == VK_NEXT) { // Page Down
-            viewport_.scroll_down(10);
+            scroll_view_down(10);
         }
         else if (key == VK_HOME) {
             cursor_pos_ = 0;
-            viewport_.scroll_to_line(0);
+            scroll_to_line(0);
         }
         else if (key == VK_END) {
             cursor_pos_ = document_->get_total_length();
@@ -1586,6 +2018,28 @@ private:
                 selected_result_index_ = -1;
             }
             InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        else if (key == VK_OEM_5 && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+\\ - Vertical split
+            if (split_mode_ == SplitMode::None) {
+                split_vertical();
+            } else {
+                close_split();
+            }
+        }
+        else if (key == VK_OEM_5 && (GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+\\ - Horizontal split
+            if (split_mode_ == SplitMode::None) {
+                split_horizontal();
+            } else {
+                close_split();
+            }
+        }
+        else if (key == L'K' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+K - Toggle synchronized scrolling
+            if (split_mode_ != SplitMode::None) {
+                toggle_sync_scrolling();
+            }
         }
         else if (key == L'O' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             open_file();
@@ -1839,9 +2293,9 @@ private:
     
     void on_mouse_wheel(int delta) {
         if (delta > 0) {
-            viewport_.scroll_up(3);
+            scroll_view_up(3);
         } else {
-            viewport_.scroll_down(3);
+            scroll_view_down(3);
         }
     }
     
@@ -2443,6 +2897,37 @@ private:
     WorkspaceManager workspace_manager_;
     std::string current_workspace_dir_;
 
+    // Split view support
+    enum class SplitMode {
+        None,
+        Horizontal,  // Top and bottom panes
+        Vertical     // Left and right panes
+    };
+
+    struct SplitPane {
+        std::shared_ptr<PieceTable> document;
+        Viewport viewport;
+        size_t cursor_pos = 0;
+        bool has_selection = false;
+        size_t selection_start = 0;
+        size_t selection_end = 0;
+        std::string file_path;
+        bool is_modified = false;
+        std::vector<size_t> extra_cursors;  // For multi-cursor in this pane
+        
+        SplitPane() : document(std::make_shared<PieceTable>()), viewport(35, 100) {
+            viewport.set_document(document);
+        }
+    };
+
+    SplitMode split_mode_ = SplitMode::None;
+    SplitPane pane1_;  // Primary pane (top or left)
+    SplitPane pane2_;  // Secondary pane (bottom or right)
+    int active_pane_ = 0;  // 0 = pane1, 1 = pane2
+    int splitter_pos_ = 0;  // Position of the splitter (pixels from top/left)
+    bool dragging_splitter_ = false;
+    bool sync_scrolling_ = false;  // Synchronized scrolling option
+
     // Project-wide search
     struct ProjectSearchResult {
         std::string file_path;
@@ -2564,10 +3049,21 @@ private:
             is_modified_ = false;
             update_title();
         } else {
-            document_ = std::make_shared<PieceTable>(content);
-            viewport_.set_document(document_);
-            current_file_ = path;
-            is_modified_ = false;
+            if (split_mode_ != SplitMode::None) {
+                // Open in active pane
+                auto& pane = (active_pane_ == 0) ? pane1_ : pane2_;
+                pane.document = std::make_shared<PieceTable>(content);
+                pane.viewport.set_document(pane.document);
+                pane.file_path = path;
+                pane.is_modified = false;
+                pane.cursor_pos = 0;
+                pane.has_selection = false;
+            } else {
+                document_ = std::make_shared<PieceTable>(content);
+                viewport_.set_document(document_);
+                current_file_ = path;
+                is_modified_ = false;
+            }
             update_title();
         }
         InvalidateRect(hwnd_, nullptr, TRUE);

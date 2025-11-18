@@ -151,11 +151,11 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Effort:** 2 weeks
 
 ### Split View
-- [ ] Horizontal split
-- [ ] Vertical split
-- [ ] Drag to resize
-- [ ] Synchronized scrolling option
-- [ ] Close split
+- [x] Horizontal split
+- [x] Vertical split
+- [x] Drag to resize
+- [x] Synchronized scrolling option
+- [x] Close split
 - **Priority:** 🟢 Nice to have
 - **Effort:** 1 week
 
