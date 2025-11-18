@@ -187,12 +187,12 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Priority:** 🟢 Nice to have
 - **Effort:** 2 weeks
 
-### Minimap
-- [ ] Document overview on right side
-- [ ] Visible region indicator
-- [ ] Click to scroll
-- [ ] Syntax color preview
-- [ ] Toggle visibility (Ctrl+M)
+### Minimap ✅ COMPLETE
+- [x] Document overview on right side
+- [x] Visible region indicator
+- [x] Click to scroll
+- [x] Syntax color preview
+- [x] Toggle visibility (Ctrl+M)
 - **Priority:** 🟢 Nice to have
 - **Effort:** 2 weeks
 

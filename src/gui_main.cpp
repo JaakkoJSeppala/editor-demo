@@ -8,6 +8,7 @@
 #include "file_tree.h"
 #include "workspace.h"
 #include "code_folding.h"
+#include "minimap.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -57,6 +58,7 @@ public:
         , find_dialog_(std::make_unique<FindDialog>())
         , highlighter_(std::make_unique<SyntaxHighlighter>())
         , folding_manager_(std::make_unique<CodeFoldingManager>())
+        , minimap_(std::make_unique<Minimap>())
         , show_file_tree_(true)
         , tree_panel_width_(260)
         , show_find_(false)
@@ -1032,6 +1034,11 @@ private:
             render_project_search_panel(memDC, client_rect);
         }
         
+        // Render minimap
+        if (minimap_ && minimap_->is_visible() && split_mode_ == SplitMode::None) {
+            render_minimap(memDC, client_rect);
+        }
+        
         // Render stats
         if (show_stats_) {
             render_stats(memDC, client_rect);
@@ -1253,6 +1260,45 @@ private:
         
         SelectObject(hdc, oldFont);
         DeleteObject(smallFont);
+    }
+    
+    void render_minimap(HDC hdc, const RECT& client_rect) {
+        if (!minimap_ || !document_) return;
+        
+        int minimap_width = minimap_->get_width();
+        int content_top = get_content_top();
+        
+        RECT minimap_rect = {
+            client_rect.right - minimap_width - 10,
+            content_top,
+            client_rect.right - 10,
+            client_rect.bottom - (show_project_search_ ? results_panel_height_ : 0)
+        };
+        
+        // Get all lines
+        std::vector<std::string> lines;
+        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+            lines.push_back(document_->get_line(i));
+        }
+        
+        // Generate syntax colors for minimap (simplified)
+        std::vector<COLORREF> colors;
+        for (const auto& line : lines) {
+            // Determine color based on content
+            COLORREF line_color = RGB(180, 180, 180); // Default
+            
+            auto tokens = highlighter_->tokenize_line(line);
+            if (!tokens.empty()) {
+                // Use color of first significant token
+                line_color = tokens[0].get_color();
+            }
+            
+            colors.push_back(line_color);
+        }
+        
+        // Render minimap
+        minimap_->render(hdc, minimap_rect, lines, viewport_.get_top_line(), 
+                        viewport_.get_visible_lines().size(), colors);
     }
 
     // --- Project-wide Search: helpers ---
@@ -1783,6 +1829,28 @@ private:
     }
     
     void on_mouse_click(int x, int y) {
+        // Check minimap click first
+        if (minimap_ && minimap_->is_visible() && split_mode_ == SplitMode::None) {
+            RECT client_rect; 
+            GetClientRect(hwnd_, &client_rect);
+            int minimap_width = minimap_->get_width();
+            int content_top = get_content_top();
+            
+            RECT minimap_rect = {
+                client_rect.right - minimap_width - 10,
+                content_top,
+                client_rect.right - 10,
+                client_rect.bottom - (show_project_search_ ? results_panel_height_ : 0)
+            };
+            
+            if (minimap_->is_point_in_minimap(x, y, minimap_rect)) {
+                size_t clicked_line = minimap_->handle_click(y, minimap_rect, document_->get_line_count());
+                scroll_to_line(clicked_line);
+                InvalidateRect(hwnd_, nullptr, TRUE);
+                return;
+            }
+        }
+        
         // Clicks inside project search results panel
         if (show_project_search_) {
             RECT client_rect; GetClientRect(hwnd_, &client_rect);
@@ -2362,6 +2430,13 @@ private:
         }
         else if (key == VK_F2) {
             show_line_numbers_ = !show_line_numbers_;
+        }
+        else if (key == L'M' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+M - Toggle minimap
+            if (minimap_) {
+                minimap_->set_visible(!minimap_->is_visible());
+                InvalidateRect(hwnd_, nullptr, TRUE);
+            }
         }
         else if (key == L'B' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+B - Toggle file tree view
@@ -3018,6 +3093,7 @@ private:
     std::unique_ptr<FindDialog> find_dialog_;
     std::unique_ptr<SyntaxHighlighter> highlighter_;
     std::unique_ptr<CodeFoldingManager> folding_manager_;
+    std::unique_ptr<Minimap> minimap_;
     
     bool show_file_tree_;
     int tree_panel_width_;
