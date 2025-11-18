@@ -1870,10 +1870,47 @@ private:
         }
         new_pos += col_index;
         
-        // Update selection
-        cursor_pos_ = new_pos;
-        selection_end_ = new_pos;
-        has_selection_ = (selection_start_ != selection_end_);
+        // Check for column selection mode (Alt+Shift)
+        bool column_mode = (GetKeyState(VK_MENU) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000);
+        
+        if (column_mode) {
+            // Column selection - create cursors on each line
+            size_t start_line = get_cursor_line();
+            size_t end_line = clicked_line;
+            if (start_line > end_line) std::swap(start_line, end_line);
+            
+            size_t start_col = get_cursor_column();
+            size_t end_col = col_index;
+            if (start_col > end_col) std::swap(start_col, end_col);
+            
+            // Create cursors for each line in the range
+            extra_cursors_.clear();
+            multi_cursor_mode_ = true;
+            
+            for (size_t l = start_line; l <= end_line && l < document_->get_line_count(); ++l) {
+                size_t line_pos = 0;
+                for (size_t i = 0; i < l; ++i) {
+                    line_pos += document_->get_line(i).length() + 1;
+                }
+                
+                std::string line_text = document_->get_line(l);
+                size_t actual_col = (std::min)(end_col, line_text.length());
+                size_t cursor_at = line_pos + actual_col;
+                
+                if (l == start_line) {
+                    cursor_pos_ = cursor_at;
+                } else {
+                    extra_cursors_.push_back(cursor_at);
+                }
+            }
+            
+            has_selection_ = false;  // Column mode uses multi-cursor, not traditional selection
+        } else {
+            // Normal selection
+            cursor_pos_ = new_pos;
+            selection_end_ = new_pos;
+            has_selection_ = (selection_start_ != selection_end_);
+        }
     }
     
     void on_key_down(WPARAM key) {
@@ -2136,6 +2173,33 @@ private:
             } else {
                 // No selection - select word under cursor and enter multi-cursor mode
                 // For simplicity, we'll require a selection first
+            }
+        }
+        else if (key == L'L' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+L - Select all occurrences
+            if (has_selection_) {
+                std::string selected = get_selected_text();
+                if (!selected.empty()) {
+                    // Build document text
+                    std::string doc_text;
+                    for (size_t i = 0; i < document_->get_line_count(); ++i) {
+                        doc_text += document_->get_line(i) + "\n";
+                    }
+                    
+                    // Find all occurrences
+                    extra_cursors_.clear();
+                    size_t pos = 0;
+                    while ((pos = doc_text.find(selected, pos)) != std::string::npos) {
+                        extra_cursors_.push_back(pos + selected.length());
+                        pos += selected.length();
+                    }
+                    
+                    if (!extra_cursors_.empty()) {
+                        multi_cursor_mode_ = true;
+                        // Keep current cursor as main cursor
+                        cursor_pos_ = get_selection_end();
+                    }
+                }
             }
         }
         else if (key == L'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {

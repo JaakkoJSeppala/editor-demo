@@ -169,9 +169,9 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 
 ### Multiple Cursors ✅ COMPLETE
 - [x] Add cursor at position (Ctrl+Click)
-- [ ] Select all occurrences (Ctrl+Shift+L)
+- [x] Select all occurrences (Ctrl+Shift+L)
 - [x] Add next occurrence (Ctrl+D)
-- [ ] Column selection (Alt+Shift+Drag)
+- [x] Column selection (Alt+Shift+Drag)
 - [x] Simultaneous editing
 - [x] Visual distinction (secondary cursors in blue)
 - [x] ESC to clear multi-cursor mode
