@@ -4,14 +4,19 @@
 #include "find_dialog.h"
 #include "syntax_highlighter.h"
 #include "tab_manager.h"
+#include "file_tree.h"
 #include <windows.h>
+#include <windowsx.h>
 #include <commdlg.h>
+#include <commctrl.h>
 #include <memory>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
 #include <fstream>
+#include <algorithm>
+#include <vector>
 
 /**
  * High-Performance Text Editor - Native Win32 GUI
@@ -45,12 +50,16 @@ public:
         , undo_manager_(std::make_unique<UndoManager>(1000))
         , find_dialog_(std::make_unique<FindDialog>())
         , highlighter_(std::make_unique<SyntaxHighlighter>())
+        , show_file_tree_(true)
+        , tree_panel_width_(260)
         , show_find_(false)
         , show_replace_(false)
         , find_text_("")
         , replace_text_("")
         , show_stats_(true)
         , show_line_numbers_(true)
+        , relative_line_numbers_(false)
+        , replace_edit_find_(true)
         , last_frame_time_(0)
         , current_file_("")
         , is_modified_(false)
@@ -61,6 +70,10 @@ public:
         , selection_end_(0)
         , char_width_(9)
         , char_height_(22)
+        , dragging_tab_(false)
+        , drag_tab_index_(static_cast<size_t>(-1))
+        , hover_tab_index_(static_cast<size_t>(-1))
+        , tab_scroll_offset_(0)
     {
         // Initialize with welcome text
         std::string welcome = 
@@ -90,11 +103,25 @@ public:
             "Press Ctrl+L to load a massive file and watch it stay at 60fps!\n"
             "Or press Ctrl+O to open any C++ file to see syntax highlighting.\n\n";
         
-        document_ = std::make_shared<PieceTable>(welcome);
+        // Initialize tab manager and first tab
+        show_tabs_ = true;
+        tab_bar_height_ = 28;
+        tab_manager_ = std::make_unique<TabManager>();
+        tab_manager_->new_tab(welcome, "");
+        if (auto* tab = tab_manager_->get_active_tab()) {
+            document_ = tab->document;
+            current_file_ = tab->file_path;
+        } else {
+            document_ = std::make_shared<PieceTable>(welcome);
+        }
         viewport_.set_document(document_);
     }
     
     bool create_window() {
+        // Init common controls (for TreeView)
+        INITCOMMONCONTROLSEX icc{ sizeof(INITCOMMONCONTROLSEX), ICC_TREEVIEW_CLASSES };
+        InitCommonControlsEx(&icc);
+
         // Register window class
         WNDCLASSEXW wc = {};
         wc.cbSize = sizeof(WNDCLASSEXW);
@@ -143,6 +170,25 @@ public:
         
         ShowWindow(hwnd_, SW_SHOW);
         UpdateWindow(hwnd_);
+
+        // Create file tree view control
+        DWORD treeStyle = WS_CHILD | WS_VISIBLE | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS;
+        RECT cr{}; GetClientRect(hwnd_, &cr);
+        int treeTop = 10 + (show_tabs_ ? tab_bar_height_ : 0);
+        tree_hwnd_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
+            treeStyle,
+            10, treeTop, tree_panel_width_, cr.bottom - treeTop - 10,
+            hwnd_, nullptr, hInstance_, nullptr);
+        if (tree_hwnd_) {
+            SendMessageW(tree_hwnd_, WM_SETFONT, (WPARAM)hFont_, TRUE);
+            setup_tree_image_list();
+            // Load current working directory by default
+            char cwd[MAX_PATH] = {0};
+            GetCurrentDirectoryA(MAX_PATH, cwd);
+            file_tree_.set_tree_control(tree_hwnd_);
+            file_tree_.load_directory(std::string(cwd));
+            file_tree_.populate_tree_view();
+        }
         
         return true;
     }
@@ -179,6 +225,20 @@ public:
     }
 
 private:
+    // Tabs
+    std::unique_ptr<TabManager> tab_manager_;
+    bool show_tabs_ = false;
+    int tab_bar_height_ = 28;
+    std::vector<RECT> tab_rects_;
+
+    // Transient status message (e.g., replace-all count)
+    std::wstring status_message_;
+    std::chrono::steady_clock::time_point status_message_until_{};
+    void show_status_message(const std::wstring& msg, int duration_ms) {
+        status_message_ = msg;
+        status_message_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms);
+    }
+
     static LRESULT CALLBACK window_proc_static(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         Win32TextEditor* editor = nullptr;
         
@@ -202,6 +262,69 @@ private:
             case WM_PAINT:
                 on_paint();
                 return 0;
+            case WM_NOTIFY: {
+                LPNMHDR hdr = reinterpret_cast<LPNMHDR>(lParam);
+                if (hdr && hdr->hwndFrom == tree_hwnd_) {
+                    if (hdr->code == NM_DBLCLK) {
+                        // Open file on double click
+                        HTREEITEM sel = TreeView_GetSelection(tree_hwnd_);
+                        if (sel) {
+                            TreeNode* node = file_tree_.find_node_by_item(sel);
+                            if (node && !node->is_directory) {
+                                open_file_from_path(node->full_path);
+                            }
+                        }
+                    } else if (hdr->code == TVN_BEGINDRAGW || hdr->code == TVN_BEGINDRAGA) {
+                        // Start drag operation in the file tree
+                        LPNMTREEVIEWW tv = reinterpret_cast<LPNMTREEVIEWW>(lParam);
+                        HTREEITEM item = tv->itemNew.hItem;
+                        if (item) {
+                            dragging_tree_ = true;
+                            tree_drag_item_ = item;
+                            TreeView_SelectItem(tree_hwnd_, item);
+                            tree_drag_img_ = TreeView_CreateDragImage(tree_hwnd_, item);
+                            POINT scr{}; GetCursorPos(&scr);
+                            ImageList_BeginDrag(tree_drag_img_, 0, 0, 0);
+                            ImageList_DragEnter(nullptr, scr.x, scr.y);
+                            SetCapture(hwnd_);
+                        }
+                    }
+                }
+                break;
+            }
+            case WM_CONTEXTMENU: {
+                HWND src = (HWND)wParam;
+                if (src == tree_hwnd_) {
+                    POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    if (pt.x == -1 && pt.y == -1) {
+                        GetCursorPos(&pt);
+                    }
+                    // Hit test to select item under cursor
+                    ScreenToClient(tree_hwnd_, &pt);
+                    TVHITTESTINFO hti{}; hti.pt = pt;
+                    HTREEITEM hit = TreeView_HitTest(tree_hwnd_, &hti);
+                    if (hit) TreeView_SelectItem(tree_hwnd_, hit);
+
+                    HMENU menu = CreatePopupMenu();
+                    AppendMenuW(menu, MF_STRING, 1, L"New File");
+                    AppendMenuW(menu, MF_STRING, 2, L"New Folder");
+                    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(menu, MF_STRING, 3, L"Delete");
+
+                    POINT spt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    if (spt.x == -1 && spt.y == -1) GetCursorPos(&spt);
+                    int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, spt.x, spt.y, 0, hwnd_, nullptr);
+                    DestroyMenu(menu);
+
+                    if (cmd != 0) {
+                        HTREEITEM sel = TreeView_GetSelection(tree_hwnd_);
+                        TreeNode* node = sel ? file_tree_.find_node_by_item(sel) : nullptr;
+                        if (node) handle_tree_context_command(cmd, node);
+                    }
+                    return 0;
+                }
+                break;
+            }
                 
             case WM_CHAR:
                 on_char(static_cast<wchar_t>(wParam));
@@ -215,17 +338,95 @@ private:
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
                 
-            case WM_LBUTTONDOWN:
-                on_mouse_click(LOWORD(lParam), HIWORD(lParam));
-                SetCapture(hwnd_); // Capture mouse for dragging
+            case WM_LBUTTONDOWN: {
+                int mx = LOWORD(lParam), my = HIWORD(lParam);
+                int tabs_top = 10;
+                int tabs_bottom = tabs_top + (show_tabs_ ? tab_bar_height_ : 0);
+                if (show_tabs_ && my >= tabs_top && my <= tabs_bottom) {
+                    // Check for tab under cursor to start drag
+                    for (size_t i = 0; i < tab_rects_.size(); ++i) {
+                        const RECT& r = tab_rects_[i];
+                        if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) {
+                            dragging_tab_ = true;
+                            drag_tab_index_ = i;
+                            SetCapture(hwnd_);
+                            InvalidateRect(hwnd_, nullptr, FALSE);
+                            return 0;
+                        }
+                    }
+                }
+                on_mouse_click(mx, my);
+                SetCapture(hwnd_); // Capture mouse for text dragging
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
+            }
                 
             case WM_LBUTTONUP:
-                ReleaseCapture();
-                return 0;
+                if (dragging_tab_) {
+                    int mx = LOWORD(lParam), my = HIWORD(lParam);
+                    size_t target = drag_tab_index_;
+                    for (size_t i = 0; i < tab_rects_.size(); ++i) {
+                        const RECT& r = tab_rects_[i];
+                        if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) { target = i; break; }
+                    }
+                    if (target != drag_tab_index_ && tab_manager_) {
+                        tab_manager_->move_tab(drag_tab_index_, target);
+                        switch_to_tab(target);
+                    }
+                    dragging_tab_ = false;
+                    drag_tab_index_ = static_cast<size_t>(-1);
+                    ReleaseCapture();
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    return 0;
+                } else if (dragging_tree_) {
+                    // Finish tree drag and drop
+                    dragging_tree_ = false;
+                    ImageList_DragLeave(nullptr);
+                    ImageList_EndDrag();
+                    if (tree_drag_img_) { ImageList_Destroy(tree_drag_img_); tree_drag_img_ = nullptr; }
+                    ReleaseCapture();
+
+                    POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    ClientToScreen(hwnd_, &pt);
+                    POINT tpt = pt; ScreenToClient(tree_hwnd_, &tpt);
+                    TVHITTESTINFO hti{}; hti.pt = tpt;
+                    HTREEITEM drop_item = TreeView_HitTest(tree_hwnd_, &hti);
+                    if (drop_item && tree_drag_item_ && drop_item != tree_drag_item_) {
+                        TreeNode* src = file_tree_.find_node_by_item(tree_drag_item_);
+                        TreeNode* tgt = file_tree_.find_node_by_item(drop_item);
+                        if (src && tgt) {
+                            std::string dest_dir;
+                            if (tgt->is_directory) dest_dir = tgt->full_path; else {
+                                std::filesystem::path tp(tgt->full_path);
+                                dest_dir = tp.parent_path().string();
+                            }
+                            attempt_move_node(src->full_path, dest_dir);
+                        }
+                    }
+                    if (tree_hover_item_) { TreeView_SelectDropTarget(tree_hwnd_, nullptr); tree_hover_item_ = nullptr; }
+                    tree_drag_item_ = nullptr;
+                    return 0;
+                } else {
+                    ReleaseCapture();
+                    return 0;
+                }
                 
             case WM_MOUSEMOVE:
+                if (dragging_tree_) {
+                    POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    ClientToScreen(hwnd_, &pt);
+                    ImageList_DragMove(pt.x, pt.y);
+
+                    POINT tpt = pt; ScreenToClient(tree_hwnd_, &tpt);
+                    TVHITTESTINFO hti{}; hti.pt = tpt;
+                    HTREEITEM hit = TreeView_HitTest(tree_hwnd_, &hti);
+                    if (hit != tree_hover_item_) {
+                        if (tree_hover_item_) TreeView_SelectDropTarget(tree_hwnd_, nullptr);
+                        tree_hover_item_ = hit;
+                        if (tree_hover_item_) TreeView_SelectDropTarget(tree_hwnd_, tree_hover_item_);
+                    }
+                    return 0;
+                }
                 if (wParam & MK_LBUTTON) {
                     // Dragging to select
                     on_mouse_drag(LOWORD(lParam), HIWORD(lParam));
@@ -233,10 +434,23 @@ private:
                 }
                 return 0;
                 
-            case WM_MOUSEWHEEL:
+            case WM_MOUSEWHEEL: {
+                // Scroll tabs when mouse is over the tab bar
+                POINT p{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                ScreenToClient(hwnd_, &p);
+                int tabs_top = 10;
+                int tabs_bottom = tabs_top + (show_tabs_ ? tab_bar_height_ : 0);
+                if (show_tabs_ && p.y >= tabs_top && p.y <= tabs_bottom) {
+                    int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                    int step = (delta > 0 ? -80 : 80);
+                    tab_scroll_offset_ = (std::max)(0, tab_scroll_offset_ + step);
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    return 0;
+                }
                 on_mouse_wheel(GET_WHEEL_DELTA_WPARAM(wParam));
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
+            }
                 
             case WM_TIMER:
                 if (wParam == 1) {
@@ -247,7 +461,7 @@ private:
                     // Only invalidate the cursor area, not the whole window
                     RECT cursor_rect;
                     GetClientRect(hwnd_, &cursor_rect);
-                    cursor_rect.left = 70;
+                    cursor_rect.left = get_content_left();
                     cursor_rect.right = cursor_rect.right - 230;
                     InvalidateRect(hwnd_, &cursor_rect, FALSE);
                 }
@@ -263,6 +477,13 @@ private:
                 return 0;
                 
             case WM_SIZE:
+                // Resize tree view
+                if (tree_hwnd_) {
+                    RECT cr{}; GetClientRect(hwnd_, &cr);
+                    int treeTop = 10 + (show_tabs_ ? tab_bar_height_ : 0);
+                    MoveWindow(tree_hwnd_, 10, treeTop, show_file_tree_ ? tree_panel_width_ : 0, cr.bottom - treeTop - 10, TRUE);
+                    ShowWindow(tree_hwnd_, show_file_tree_ ? SW_SHOW : SW_HIDE);
+                }
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
                 
@@ -315,21 +536,65 @@ private:
         SetTextRenderingHint(memDC);
         SelectObject(memDC, hFont_);
         
+        // Render tab bar (if enabled)
+        render_tabs(memDC, client_rect);
+
         // Render text lines
         auto visible_lines = viewport_.get_visible_lines();
-        int y = 10;
+        int y = get_content_top();
         size_t line_num = viewport_.get_top_line();
+        size_t current_line = get_cursor_line();
+        RECT client_rect_copy = client_rect;
+        int base_left = get_content_left();
         
         for (const auto& line : visible_lines) {
             // Line number (gray) - only if enabled
-            int text_x_offset = 10; // Default offset when line numbers are hidden
+            int text_x_offset = base_left; // Default offset when line numbers are hidden
             if (show_line_numbers_) {
+                // Prepare number string: relative or absolute
+                std::wstring line_num_str;
+                if (relative_line_numbers_) {
+                    if (line_num == current_line) {
+                        // Show absolute number for current line (like Vim)
+                        line_num_str = std::to_wstring(line_num + 1);
+                    } else {
+                        size_t diff = (line_num > current_line) ? (line_num - current_line) : (current_line - line_num);
+                        line_num_str = std::to_wstring(diff);
+                    }
+                } else {
+                    line_num_str = std::to_wstring(line_num + 1);
+                }
+
+                // Draw gutter background
+                RECT gutter_rect{ base_left, y, base_left + 70, y + char_height_ };
+                HBRUSH gutterBrush = CreateSolidBrush(RGB(35, 35, 45));
+                FillRect(memDC, &gutter_rect, gutterBrush);
+                DeleteObject(gutterBrush);
+
+                // Right-align numbers in gutter
+                SIZE num_sz{};
+                GetTextExtentPoint32W(memDC, line_num_str.c_str(), (int)line_num_str.length(), &num_sz);
+                int gutter_left = base_left;
+                int gutter_right = base_left + 70;
+                int num_x = gutter_right - num_sz.cx - 4; // small padding
                 SetTextColor(memDC, RGB(100, 100, 120));
-                std::wstring line_num_str = std::to_wstring(line_num + 1);
-                TextOutW(memDC, 10, y, line_num_str.c_str(), line_num_str.length());
-                text_x_offset = 80; // Offset for text when line numbers are shown
+                TextOutW(memDC, num_x, y, line_num_str.c_str(), (int)line_num_str.length());
+                text_x_offset = base_left + 70; // Offset for text when line numbers are shown
             }
             
+            // Current line highlighting (draw before text)
+            if (line_num == current_line) {
+                RECT hl_rect{
+                    text_x_offset,
+                    y,
+                    client_rect_copy.right - (show_stats_ ? 230 : 10),
+                    y + char_height_
+                };
+                HBRUSH hlBrush = CreateSolidBrush(RGB(45, 45, 60));
+                FillRect(memDC, &hl_rect, hlBrush);
+                DeleteObject(hlBrush);
+            }
+
             // Calculate line position in document
             size_t line_start_pos = 0;
             for (size_t i = 0; i < line_num; ++i) {
@@ -402,6 +667,34 @@ private:
                 }
             }
             
+            // Draw extra cursors if in multi-cursor mode
+            if (cursor_visible_ && multi_cursor_mode_) {
+                for (size_t extra_pos : extra_cursors_) {
+                    // Skip if it's the main cursor position
+                    if (extra_pos == cursor_pos_) continue;
+                    
+                    // Check if this extra cursor is on current line
+                    size_t pos_counter = 0;
+                    for (size_t i = 0; i < line_num; ++i) {
+                        pos_counter += document_->get_line(i).length() + 1;
+                    }
+                    size_t line_end = pos_counter + line.length();
+                    
+                    if (extra_pos >= pos_counter && extra_pos <= line_end) {
+                        size_t col = extra_pos - pos_counter;
+                        HPEN extraCursorPen = CreatePen(PS_SOLID, 2, RGB(200, 200, 255));
+                        HPEN oldPen = (HPEN)SelectObject(memDC, extraCursorPen);
+                        
+                        int cursor_x = text_x_offset + col * char_width_;
+                        MoveToEx(memDC, cursor_x, y, nullptr);
+                        LineTo(memDC, cursor_x, y + char_height_);
+                        
+                        SelectObject(memDC, oldPen);
+                        DeleteObject(extraCursorPen);
+                    }
+                }
+            }
+            
             y += char_height_;
             line_num++;
         }
@@ -426,6 +719,111 @@ private:
         // Enable ClearType for smoother text
         SetBkMode(hdc, TRANSPARENT);
     }
+
+    int get_content_top() const {
+        return 10 + (show_tabs_ ? tab_bar_height_ : 0);
+    }
+
+    int get_content_left() const {
+        return (show_file_tree_ ? (10 + tree_panel_width_ + 10) : 10);
+    }
+
+    void render_tabs(HDC hdc, const RECT& client_rect) {
+        if (!show_tabs_ || !tab_manager_) return;
+        tab_rects_.clear();
+        const int view_left = 10;
+        const int view_right = client_rect.right - 10;
+        int x = view_left - tab_scroll_offset_;
+        int y = 10;
+        int padding_x = 12;
+        int padding_y = 6;
+        int gap = 6;
+        size_t count = tab_manager_->get_tab_count();
+        int total_width = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const EditorTab* tab = tab_manager_->get_tab(i);
+            std::string name = tab->display_name;
+            size_t slash = name.find_last_of("/\\");
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            if (tab->is_modified) name += " *";
+            std::wstring wname;
+            for (char c : name) wname += static_cast<wchar_t>(c);
+            SIZE sz{};
+            GetTextExtentPoint32W(hdc, wname.c_str(), (int)wname.length(), &sz);
+            int w = sz.cx + padding_x * 2;
+            int h = tab_bar_height_;
+            RECT r{ x, y, x + w, y + h };
+            tab_rects_.push_back(r);
+            if (r.right >= view_left && r.left <= view_right) {
+                HBRUSH brush = CreateSolidBrush(i == tab_manager_->get_active_tab_index() ? RGB(50,50,60) : RGB(35,35,40));
+                FillRect(hdc, &r, brush);
+                DeleteObject(brush);
+                HPEN pen = CreatePen(PS_SOLID, 1, RGB(80,80,90));
+                HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+                HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                Rectangle(hdc, r.left, r.top, r.right, r.bottom);
+                SelectObject(hdc, oldBrush);
+                SelectObject(hdc, oldPen);
+                DeleteObject(pen);
+                SetTextColor(hdc, RGB(200,200,210));
+                SetBkMode(hdc, TRANSPARENT);
+                TextOutW(hdc, x + padding_x, y + (h - sz.cy)/2, wname.c_str(), (int)wname.length());
+            }
+            x += w + gap;
+            total_width = x - view_left;
+        }
+
+        bool overflow_left = tab_scroll_offset_ > 0;
+        bool overflow_right = (view_left + total_width) > view_right;
+        if (overflow_left) {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(160,160,170));
+            HPEN old = (HPEN)SelectObject(hdc, pen);
+            MoveToEx(hdc, view_left + 2, y + tab_bar_height_/2, nullptr);
+            LineTo(hdc, view_left + 10, y + tab_bar_height_/2 - 6);
+            MoveToEx(hdc, view_left + 2, y + tab_bar_height_/2, nullptr);
+            LineTo(hdc, view_left + 10, y + tab_bar_height_/2 + 6);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+        }
+        if (overflow_right) {
+            HPEN pen = CreatePen(PS_SOLID, 2, RGB(160,160,170));
+            HPEN old = (HPEN)SelectObject(hdc, pen);
+            int xr = view_right - 2;
+            MoveToEx(hdc, xr - 8, y + tab_bar_height_/2 - 6, nullptr);
+            LineTo(hdc, xr, y + tab_bar_height_/2);
+            MoveToEx(hdc, xr - 8, y + tab_bar_height_/2 + 6, nullptr);
+            LineTo(hdc, xr, y + tab_bar_height_/2);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+        }
+
+        // Clamp scroll offset if content became smaller
+        if (!overflow_right && tab_scroll_offset_ > 0) {
+            int excess = (view_left + total_width) - view_right;
+            if (excess < 0) excess = 0;
+            if (tab_scroll_offset_ > excess) tab_scroll_offset_ = excess;
+        }
+    }
+
+    void switch_to_tab(size_t index) {
+        if (!tab_manager_) return;
+        // Persist current state to active tab
+        if (auto* cur = tab_manager_->get_active_tab()) {
+            cur->cursor_pos = cursor_pos_;
+            cur->is_modified = is_modified_;
+            cur->file_path = current_file_;
+        }
+        tab_manager_->set_active_tab(index);
+        if (auto* tab = tab_manager_->get_active_tab()) {
+            document_ = tab->document;
+            current_file_ = tab->file_path;
+            cursor_pos_ = tab->cursor_pos;
+            is_modified_ = tab->is_modified;
+            viewport_.set_document(document_);
+        }
+        update_title();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
     
     void render_stats(HDC hdc, const RECT& client_rect) {
         std::wostringstream stats;
@@ -433,7 +831,11 @@ private:
         stats << L"Frame: " << std::fixed << std::setprecision(2) << last_frame_time_ << L"ms\n";
         stats << L"Lines: " << document_->get_line_count() << L"\n";
         stats << L"Chars: " << document_->get_total_length() << L"\n";
-        stats << L"Cursor: " << get_cursor_line() + 1 << L":" << get_cursor_column() + 1 << L"\n";
+        stats << L"Cursor: " << get_cursor_line() + 1 << L":" << get_cursor_column() + 1;
+        if (multi_cursor_mode_ && !extra_cursors_.empty()) {
+            stats << L" (+" << extra_cursors_.size() << L")";
+        }
+        stats << L"\n";
         stats << L"View: " << viewport_.get_top_line() + 1 << L"\n";
         stats << L"Render: " << std::fixed << std::setprecision(2) 
               << viewport_.get_last_render_time_ms() << L"ms\n";
@@ -451,15 +853,23 @@ private:
         }
         
         if (show_replace_) {
-            std::wstring wfind;
-            for (char c : find_text_) {
-                wfind += static_cast<wchar_t>(c);
-            }
-            stats << L"Find: " << wfind << L"\n";
-            stats << L"Replace: [Ctrl+R]\n";
+            std::wstring wfind, wrep;
+            for (char c : find_text_) wfind += static_cast<wchar_t>(c);
+            for (char c : replace_text_) wrep += static_cast<wchar_t>(c);
+            stats << L"Find: " << wfind << (replace_edit_find_ ? L"  [editing]" : L"") << L"\n";
+            stats << L"Replace: " << wrep << (!replace_edit_find_ ? L"  [editing]" : L"") << L"\n";
+            stats << L"Ctrl+R: Replace current   Ctrl+Shift+R: Replace All\n";
             if (find_dialog_->has_matches()) {
                 stats << L"Matches: " << (find_dialog_->get_current_match_index() + 1) 
                       << L"/" << find_dialog_->get_match_count() << L"\n";
+            }
+        }
+        
+        // Transient status message (if any)
+        {
+            auto now = std::chrono::steady_clock::now();
+            if (now < status_message_until_ && !status_message_.empty()) {
+                stats << status_message_ << L"\n";
             }
         }
         
@@ -478,6 +888,7 @@ private:
             client_rect.right - 10,
             180
         };
+
         HBRUSH statsBrush = CreateSolidBrush(RGB(20, 20, 25));
         FillRect(hdc, &stats_rect, statsBrush);
         DeleteObject(statsBrush);
@@ -510,6 +921,14 @@ private:
         SelectObject(hdc, oldFont);
         DeleteObject(smallFont);
     }
+
+    void mark_active_tab_modified() {
+        if (tab_manager_) {
+            if (auto* tab = tab_manager_->get_active_tab()) {
+                tab->is_modified = true;
+            }
+        }
+    }
     
     void on_char(wchar_t ch) {
         // If find mode is active, add to search string
@@ -520,12 +939,22 @@ private:
             return;
         }
         
-        // If replace mode is active, add to search string
-        if (show_replace_ && ch >= 32 && ch < 127) {
-            char c = static_cast<char>(ch);
-            find_text_ += c;
-            perform_find();
-            return;
+        // If replace mode is active, edit find/replace inputs
+        if (show_replace_) {
+            if (ch == L'\t') {
+                replace_edit_find_ = !replace_edit_find_;
+                return;
+            }
+            if (ch >= 32 && ch < 127) {
+                char c = static_cast<char>(ch);
+                if (replace_edit_find_) {
+                    find_text_ += c;
+                    perform_find();
+                } else {
+                    replace_text_ += c;
+                }
+                return;
+            }
         }
         
         if (ch >= 32 || ch == L'\r' || ch == L'\n' || ch == L'\t') {
@@ -535,12 +964,35 @@ private:
             
             std::string str(1, c);
             
-            // Use undo manager for insertion
-            auto cmd = std::make_unique<InsertCommand>(document_.get(), cursor_pos_, str);
-            undo_manager_->execute(std::move(cmd));
+            if (multi_cursor_mode_ && !extra_cursors_.empty()) {
+                // Multi-cursor insertion - sort cursors and insert from end to start
+                std::vector<size_t> all_cursors = extra_cursors_;
+                all_cursors.push_back(cursor_pos_);
+                std::sort(all_cursors.begin(), all_cursors.end(), std::greater<size_t>());
+                
+                // Remove duplicates
+                all_cursors.erase(std::unique(all_cursors.begin(), all_cursors.end()), all_cursors.end());
+                
+                // Insert at each cursor from end to start
+                for (size_t pos : all_cursors) {
+                    auto cmd = std::make_unique<InsertCommand>(document_.get(), pos, str);
+                    undo_manager_->execute(std::move(cmd));
+                }
+                
+                // Update all cursor positions
+                cursor_pos_++;
+                for (size_t& pos : extra_cursors_) {
+                    pos++;
+                }
+            } else {
+                // Single cursor insertion
+                auto cmd = std::make_unique<InsertCommand>(document_.get(), cursor_pos_, str);
+                undo_manager_->execute(std::move(cmd));
+                cursor_pos_++;
+            }
             
-            cursor_pos_++;
             is_modified_ = true;
+            mark_active_tab_modified();
             
             // Reset cursor blink
             cursor_visible_ = true;
@@ -549,11 +1001,24 @@ private:
     }
     
     void on_mouse_click(int x, int y) {
+        // Handle tab clicks first
+        int tabs_top = 10;
+        int tabs_bottom = tabs_top + (show_tabs_ ? tab_bar_height_ : 0);
+        if (show_tabs_ && y >= tabs_top && y <= tabs_bottom) {
+            for (size_t i = 0; i < tab_rects_.size(); ++i) {
+                const RECT& r = tab_rects_[i];
+                if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+                    switch_to_tab(i);
+                    return;
+                }
+            }
+        }
+
         // Convert screen coordinates to line/column
-        int text_offset = show_line_numbers_ ? 80 : 10;
+        int text_offset = (show_line_numbers_ ? 70 : 0) + get_content_left();
         if (x < text_offset) return; // Clicked on line numbers area or margin
         
-        int line_index = (y - 10) / char_height_;
+        int line_index = (y - get_content_top()) / char_height_;
         size_t clicked_line = viewport_.get_top_line() + line_index;
         
         if (clicked_line >= document_->get_line_count()) {
@@ -571,16 +1036,32 @@ private:
         }
         
         // Calculate cursor position in document
-        cursor_pos_ = 0;
+        size_t clicked_pos = 0;
         for (size_t i = 0; i < clicked_line; ++i) {
-            cursor_pos_ += document_->get_line(i).length() + 1; // +1 for newline
+            clicked_pos += document_->get_line(i).length() + 1; // +1 for newline
         }
-        cursor_pos_ += col_index;
+        clicked_pos += col_index;
         
         // Clamp to document bounds
-        if (cursor_pos_ > document_->get_total_length()) {
-            cursor_pos_ = document_->get_total_length();
+        if (clicked_pos > document_->get_total_length()) {
+            clicked_pos = document_->get_total_length();
         }
+        
+        // Check for Ctrl+Click to add cursor
+        bool ctrl_pressed = GetKeyState(VK_CONTROL) & 0x8000;
+        if (ctrl_pressed) {
+            // Add cursor at clicked position
+            multi_cursor_mode_ = true;
+            if (std::find(extra_cursors_.begin(), extra_cursors_.end(), clicked_pos) == extra_cursors_.end()) {
+                extra_cursors_.push_back(clicked_pos);
+            }
+            return;
+        }
+        
+        // Normal click - clear multi-cursor mode
+        multi_cursor_mode_ = false;
+        extra_cursors_.clear();
+        cursor_pos_ = clicked_pos;
         
         // Start new selection
         has_selection_ = false;
@@ -598,10 +1079,10 @@ private:
     
     void on_mouse_drag(int x, int y) {
         // Convert screen coordinates to position
-        int text_offset = show_line_numbers_ ? 80 : 10;
+        int text_offset = (show_line_numbers_ ? 70 : 0) + get_content_left();
         if (x < text_offset) return;
         
-        int line_index = (y - 10) / char_height_;
+        int line_index = (y - get_content_top()) / char_height_;
         size_t clicked_line = viewport_.get_top_line() + line_index;
         
         if (clicked_line >= document_->get_line_count()) {
@@ -631,19 +1112,54 @@ private:
     
     void on_key_down(WPARAM key) {
         if (key == VK_ESCAPE) {
-            SendMessage(hwnd_, WM_CLOSE, 0, 0);
+            if (show_find_) {
+                show_find_ = false;
+                find_text_ = "";
+                find_dialog_->clear_matches();
+            } else if (show_replace_) {
+                show_replace_ = false;
+                find_text_ = "";
+                replace_text_ = "";
+                find_dialog_->clear_matches();
+            } else if (multi_cursor_mode_) {
+                // Clear multi-cursor mode
+                multi_cursor_mode_ = false;
+                extra_cursors_.clear();
+            } else {
+                SendMessage(hwnd_, WM_CLOSE, 0, 0);
+            }
         }
         else if (key == VK_BACK) {
-            // If in find or replace mode, delete from search string
-            if ((show_find_ || show_replace_) && !find_text_.empty()) {
-                find_text_.pop_back();
+            // If in find mode, delete from search string
+            if (show_find_) {
                 if (!find_text_.empty()) {
-                    perform_find();
-                } else {
-                    find_dialog_->clear_matches();
+                    find_text_.pop_back();
+                    if (!find_text_.empty()) {
+                        perform_find();
+                    } else {
+                        find_dialog_->clear_matches();
+                    }
                 }
                 return;
             }
+            // If in replace mode, backspace in active field
+            if (show_replace_) {
+                if (replace_edit_find_) {
+                    if (!find_text_.empty()) {
+                        find_text_.pop_back();
+                        if (!find_text_.empty()) {
+                            perform_find();
+                        } else {
+                            find_dialog_->clear_matches();
+                        }
+                    }
+                } else {
+                    if (!replace_text_.empty()) replace_text_.pop_back();
+                }
+                return;
+            }
+                        is_modified_ = true;
+                        mark_active_tab_modified();
             
             if (cursor_pos_ > 0) {
                 // Use undo manager for deletion
@@ -651,6 +1167,8 @@ private:
                 undo_manager_->execute(std::move(cmd));
                 cursor_pos_--;
                 is_modified_ = true;
+                is_modified_ = true;
+                mark_active_tab_modified();
                 update_title();
             }
         }
@@ -660,6 +1178,7 @@ private:
                 auto cmd = std::make_unique<DeleteCommand>(document_.get(), cursor_pos_, 1);
                 undo_manager_->execute(std::move(cmd));
                 is_modified_ = true;
+                mark_active_tab_modified();
                 update_title();
             }
         }
@@ -668,6 +1187,7 @@ private:
             if (undo_manager_->can_undo()) {
                 undo_manager_->undo();
                 is_modified_ = true;
+                mark_active_tab_modified();
                 update_title();
             }
         }
@@ -676,6 +1196,7 @@ private:
             if (undo_manager_->can_redo()) {
                 undo_manager_->redo();
                 is_modified_ = true;
+                mark_active_tab_modified();
                 update_title();
             }
         }
@@ -738,6 +1259,62 @@ private:
             selection_end_ = document_->get_total_length();
             has_selection_ = true;
             cursor_pos_ = selection_end_;
+            // Clear multi-cursor mode on select all
+            multi_cursor_mode_ = false;
+            extra_cursors_.clear();
+        }
+        else if (key == L'D' && (GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+D - Add next occurrence to multi-cursor
+            if (has_selection_) {
+                std::string selected = get_selected_text();
+                if (!selected.empty()) {
+                    // Build document text
+                    std::string doc_text;
+                    for (size_t i = 0; i < document_->get_line_count(); ++i) {
+                        doc_text += document_->get_line(i) + "\n";
+                    }
+                    
+                    // Find next occurrence after current selection
+                    size_t search_start = get_selection_end();
+                    size_t pos = doc_text.find(selected, search_start);
+                    
+                    if (pos != std::string::npos) {
+                        // Enable multi-cursor mode
+                        multi_cursor_mode_ = true;
+                        
+                        // Add current selection end to extra cursors if not already there
+                        size_t current_end = get_selection_end();
+                        if (std::find(extra_cursors_.begin(), extra_cursors_.end(), current_end) == extra_cursors_.end()) {
+                            extra_cursors_.push_back(current_end);
+                        }
+                        
+                        // Add new cursor at found position
+                        extra_cursors_.push_back(pos + selected.length());
+                        
+                        // Update main cursor to the new position
+                        cursor_pos_ = pos + selected.length();
+                        selection_start_ = pos;
+                        selection_end_ = pos + selected.length();
+                        has_selection_ = true;
+                        
+                        // Scroll to new cursor
+                        size_t line = 0;
+                        size_t char_count = 0;
+                        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+                            size_t line_len = document_->get_line(i).length() + 1;
+                            if (char_count + line_len > pos) {
+                                line = i;
+                                break;
+                            }
+                            char_count += line_len;
+                        }
+                        viewport_.scroll_to_line(line);
+                    }
+                }
+            } else {
+                // No selection - select word under cursor and enter multi-cursor mode
+                // For simplicity, we'll require a selection first
+            }
         }
         else if (key == L'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+C - Copy
@@ -753,7 +1330,7 @@ private:
             // Ctrl+V - Paste
             paste_from_clipboard();
         }
-        else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
             // Ctrl+R - Replace current match (in replace mode)
             if (show_replace_ && !find_text_.empty() && find_dialog_->has_matches()) {
                 auto* current_match = find_dialog_->get_current_match();
@@ -765,6 +1342,7 @@ private:
                     undo_manager_->execute(std::move(cmd));
                     cursor_pos_ = current_match->position;
                     is_modified_ = true;
+                    mark_active_tab_modified();
                     update_title();
                     
                     // Re-search and find next match
@@ -772,6 +1350,38 @@ private:
                     if (find_dialog_->has_matches()) {
                         find_next();
                     }
+                }
+            }
+        }
+        else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+R - Replace All
+            if (show_replace_ && !find_text_.empty()) {
+                // Build full document text
+                std::string doc_text;
+                for (size_t i = 0; i < document_->get_line_count(); ++i) {
+                    doc_text += document_->get_line(i) + "\n";
+                }
+                int replaced = find_dialog_->replace_all(doc_text, find_text_, replace_text_);
+                if (replaced > 0) {
+                    // Replace document content
+                    document_ = std::make_shared<PieceTable>(doc_text);
+                    viewport_.set_document(document_);
+                    cursor_pos_ = 0;
+                    is_modified_ = true;
+                    mark_active_tab_modified();
+                    if (tab_manager_) {
+                        if (auto* tab = tab_manager_->get_active_tab()) {
+                            tab->document = document_;
+                        }
+                    }
+                    // Refresh matches
+                    perform_find();
+                    update_title();
+                    // Show feedback
+                    show_status_message(L"Replaced " + std::to_wstring(replaced) + L" occurrence(s)", 2000);
+                } else {
+                    // No replacements performed
+                    show_status_message(L"No matches to replace", 2000);
                 }
             }
         }
@@ -791,6 +1401,67 @@ private:
         }
         else if (key == VK_F2) {
             show_line_numbers_ = !show_line_numbers_;
+        }
+        else if (key == L'B' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+B - Toggle file tree view
+            show_file_tree_ = !show_file_tree_;
+            SendMessage(hwnd_, WM_SIZE, 0, 0);
+        }
+        else if (key == VK_F4) {
+            // Toggle relative line numbers
+            relative_line_numbers_ = !relative_line_numbers_;
+        }
+        else if (key == VK_TAB && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+Tab / Ctrl+Shift+Tab - Switch tabs
+            if (tab_manager_) {
+                size_t count = tab_manager_->get_tab_count();
+                if (count > 1) {
+                    size_t cur = tab_manager_->get_active_tab_index();
+                    bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+                    size_t next = shift ? (cur == 0 ? count - 1 : cur - 1) : (cur + 1) % count;
+                    switch_to_tab(next);
+                }
+            }
+        }
+        else if ((key >= L'1' && key <= L'9') && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+1-9 - Switch to tab by number
+            if (tab_manager_) {
+                size_t tab_index = key - L'1';  // 0-based index
+                if (tab_index < tab_manager_->get_tab_count()) {
+                    switch_to_tab(tab_index);
+                }
+            }
+        }
+        else if (key == L'T' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+T - New tab
+            if (tab_manager_) {
+                size_t idx = tab_manager_->new_tab("", "");
+                switch_to_tab(idx);
+                is_modified_ = false;
+                update_title();
+            }
+        }
+        else if (key == L'W' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+W - Close tab
+            if (tab_manager_) {
+                size_t before = tab_manager_->get_tab_count();
+                size_t cur = tab_manager_->get_active_tab_index();
+                if (tab_manager_->close_tab(cur)) {
+                    size_t newIndex = cur;
+                    size_t count = tab_manager_->get_tab_count();
+                    if (newIndex >= count) newIndex = (count > 0 ? count - 1 : 0);
+                    switch_to_tab(newIndex);
+                }
+            }
+        }
+        else if (key == L'W' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+W - Close all tabs
+            if (tab_manager_) {
+                tab_manager_->close_all_tabs();
+                switch_to_tab(0);
+                is_modified_ = false;
+                update_title();
+            }
         }
         
         // Reset cursor blink on any key
@@ -868,8 +1539,20 @@ private:
                                std::istreambuf_iterator<char>());
             file.close();
             
-            // Load into editor
-            document_ = std::make_shared<PieceTable>(content);
+            // Load into current tab's document
+            if (tab_manager_) {
+                // Replace current document content by creating a new PieceTable
+                document_ = std::make_shared<PieceTable>(content);
+                if (auto* tab = tab_manager_->get_active_tab()) {
+                    tab->document = document_;
+                    tab->file_path = narrow_filename;
+                    tab->display_name = narrow_filename;
+                    tab->cursor_pos = 0;
+                    tab->is_modified = false;
+                }
+            } else {
+                document_ = std::make_shared<PieceTable>(content);
+            }
             viewport_.set_document(document_);
             cursor_pos_ = 0;
             current_file_ = narrow_filename;
@@ -942,6 +1625,13 @@ private:
         
         current_file_ = filename;
         is_modified_ = false;
+        if (tab_manager_) {
+            if (auto* tab = tab_manager_->get_active_tab()) {
+                tab->file_path = filename;
+                tab->display_name = filename;
+                tab->is_modified = false;
+            }
+        }
         update_title();
         InvalidateRect(hwnd_, nullptr, FALSE);
         
@@ -1158,6 +1848,19 @@ private:
     HINSTANCE hInstance_;
     HWND hwnd_ = nullptr;
     HFONT hFont_ = nullptr;
+    HIMAGELIST tree_images_ = nullptr;
+    HWND tree_hwnd_ = nullptr;
+    FileTree file_tree_;
+    // Tree drag & drop state
+    bool dragging_tree_ = false;
+    HIMAGELIST tree_drag_img_ = nullptr;
+    HTREEITEM tree_drag_item_ = nullptr;
+    HTREEITEM tree_hover_item_ = nullptr;
+    // Tab bar state
+    bool dragging_tab_ = false;
+    size_t drag_tab_index_ = static_cast<size_t>(-1);
+    size_t hover_tab_index_ = static_cast<size_t>(-1);
+    int tab_scroll_offset_ = 0;
     
     std::shared_ptr<PieceTable> document_;
     Viewport viewport_;
@@ -1165,6 +1868,8 @@ private:
     std::unique_ptr<FindDialog> find_dialog_;
     std::unique_ptr<SyntaxHighlighter> highlighter_;
     
+    bool show_file_tree_;
+    int tree_panel_width_;
     bool show_find_;
     bool show_replace_;
     std::string find_text_;
@@ -1173,6 +1878,8 @@ private:
     size_t cursor_pos_ = 0;
     bool show_stats_;
     bool show_line_numbers_;
+    bool relative_line_numbers_;
+    bool replace_edit_find_;
     
     double fps_ = 60.0;
     double last_frame_time_;
@@ -1189,6 +1896,151 @@ private:
     
     int char_width_;   // Actual character width from font metrics
     int char_height_;  // Actual character height from font metrics
+    
+    // Multi-cursor support
+    std::vector<size_t> extra_cursors_;  // Additional cursor positions
+    bool multi_cursor_mode_ = false;
+
+    void setup_tree_image_list() {
+        if (!tree_hwnd_) return;
+        if (tree_images_) {
+            ImageList_Destroy(tree_images_);
+            tree_images_ = nullptr;
+        }
+        tree_images_ = ImageList_Create(16, 16, ILC_COLOR32, 6, 6);
+        auto add_swatch = [&](COLORREF color) {
+            HDC hdc = GetDC(hwnd_);
+            HDC mem = CreateCompatibleDC(hdc);
+            HBITMAP bmp = CreateCompatibleBitmap(hdc, 16, 16);
+            HBITMAP old = (HBITMAP)SelectObject(mem, bmp);
+            HBRUSH br = CreateSolidBrush(color);
+            RECT r{0,0,16,16};
+            FillRect(mem, &r, br);
+            DeleteObject(br);
+            SelectObject(mem, old);
+            DeleteDC(mem);
+            ReleaseDC(hwnd_, hdc);
+            int idx = ImageList_Add(tree_images_, bmp, nullptr);
+            DeleteObject(bmp);
+            return idx;
+        };
+        // 0: folder, 1: default, 2: cpp, 3: header, 4: txt/md, 5: json/xml
+        add_swatch(RGB(240, 200, 100)); // folder
+        add_swatch(RGB(160, 160, 170)); // default
+        add_swatch(RGB(80, 160, 255));  // cpp
+        add_swatch(RGB(120, 200, 255)); // header
+        add_swatch(RGB(180, 220, 160)); // text
+        add_swatch(RGB(255, 180, 120)); // json/xml
+        TreeView_SetImageList(tree_hwnd_, tree_images_, TVSIL_NORMAL);
+    }
+
+    void handle_tree_context_command(int cmd, TreeNode* node) {
+        namespace fs = std::filesystem;
+        auto parent_dir = [&](const std::string& p) {
+            fs::path fp(p);
+            if (fs::is_directory(fp)) return fp;
+            return fp.parent_path();
+        };
+
+        if (cmd == 1) { // New File
+            fs::path dir = parent_dir(node->full_path);
+            fs::path base = dir / "New File.txt";
+            fs::path candidate = base;
+            int i = 1;
+            while (fs::exists(candidate)) {
+                candidate = dir / ("New File (" + std::to_string(i++) + ").txt");
+            }
+            std::ofstream(candidate.string()).close();
+            file_tree_.reload();
+        } else if (cmd == 2) { // New Folder
+            fs::path dir = parent_dir(node->full_path);
+            fs::path base = dir / "New Folder";
+            fs::path candidate = base;
+            int i = 1;
+            while (fs::exists(candidate)) {
+                candidate = dir / ("New Folder (" + std::to_string(i++) + ")");
+            }
+            fs::create_directory(candidate);
+            file_tree_.reload();
+        } else if (cmd == 3) { // Delete
+            std::wstring wpath;
+            for (char c : node->full_path) wpath += static_cast<wchar_t>(c);
+            std::wstring msg = L"Delete \"" + wpath + L"\"?";
+            if (MessageBoxW(hwnd_, msg.c_str(), L"Confirm Delete", MB_YESNO | MB_ICONWARNING) == IDYES) {
+                try {
+                    if (std::filesystem::is_directory(node->full_path)) {
+                        std::filesystem::remove_all(node->full_path);
+                    } else {
+                        std::filesystem::remove(node->full_path);
+                    }
+                } catch (...) {}
+                file_tree_.reload();
+            }
+        }
+    }
+
+    void open_file_from_path(const std::string& path) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file) return;
+        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        file.close();
+        if (tab_manager_) {
+            size_t idx = tab_manager_->new_tab(content, path);
+            switch_to_tab(idx);
+            is_modified_ = false;
+            update_title();
+        } else {
+            document_ = std::make_shared<PieceTable>(content);
+            viewport_.set_document(document_);
+            current_file_ = path;
+            is_modified_ = false;
+            update_title();
+        }
+        InvalidateRect(hwnd_, nullptr, TRUE);
+    }
+    
+    static bool is_descendant_path(const std::string& src, const std::string& dst) {
+        std::filesystem::path s(src);
+        std::filesystem::path d(dst);
+        std::error_code ec;
+        auto sp = std::filesystem::weakly_canonical(s, ec);
+        auto dp = std::filesystem::weakly_canonical(d, ec);
+        if (ec) return false;
+        auto spstr = sp.string();
+        auto dpstr = dp.string();
+        auto lower = [](std::string x){ for (auto& c: x) c = (char)tolower((unsigned char)c); return x; };
+        spstr = lower(spstr);
+        dpstr = lower(dpstr);
+        if (dpstr.size() < spstr.size()) return false;
+        if (dpstr.compare(0, spstr.size(), spstr) != 0) return false;
+        if (dpstr.size() == spstr.size()) return true;
+        char next = dpstr[spstr.size()];
+        return next == '\\' || next == '/';
+    }
+
+    void attempt_move_node(const std::string& src_path, const std::string& dest_dir) {
+        using namespace std::filesystem;
+        try {
+            path sp(src_path);
+            path dd(dest_dir);
+            if (!exists(sp) || !exists(dd) || !is_directory(dd)) return;
+            if (is_descendant_path(src_path, dest_dir)) return; // prevent moving into self/descendant
+            path new_path = dd / sp.filename();
+            if (equivalent(sp.parent_path(), dd)) return; // no-op
+            if (exists(new_path)) {
+                std::string base = sp.stem().string();
+                std::string ext = sp.has_extension() ? sp.extension().string() : std::string();
+                int i = 1;
+                do {
+                    new_path = dd / (base + " (" + std::to_string(i++) + ")" + ext);
+                } while (exists(new_path));
+            }
+            rename(sp, new_path);
+            file_tree_.reload();
+        } catch (...) {
+            MessageBoxW(hwnd_, L"Failed to move item.", L"Drag & Drop", MB_OK | MB_ICONERROR);
+        }
+    }
 };
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {

@@ -39,6 +39,9 @@ if(WIN32)
 
     target_include_directories(editor_gui PRIVATE include)
 
+    # Link common controls for TreeView
+    target_link_libraries(editor_gui PRIVATE comctl32)
+
     if(MSVC)
         target_compile_options(editor_gui PRIVATE /W4 /O2)
     else()

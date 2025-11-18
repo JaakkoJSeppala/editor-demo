@@ -75,6 +75,36 @@ public:
     void close_active_tab() {
         close_tab(active_tab_index_);
     }
+
+    // Move a tab from one index to another
+    bool move_tab(size_t from, size_t to) {
+        if (from >= tabs_.size() || to >= tabs_.size() || from == to) return false;
+        auto tab = std::move(tabs_[from]);
+        tabs_.erase(tabs_.begin() + from);
+        tabs_.insert(tabs_.begin() + to, std::move(tab));
+        if (active_tab_index_ == from) {
+            active_tab_index_ = to;
+        } else if (from < active_tab_index_ && to >= active_tab_index_) {
+            active_tab_index_ -= 1;
+        } else if (from > active_tab_index_ && to <= active_tab_index_) {
+            active_tab_index_ += 1;
+        }
+        return true;
+    }
+
+    bool close_all_tabs() {
+        if (tabs_.empty()) {
+            // Ensure at least one empty tab exists afterwards
+            new_tab();
+            return true;
+        }
+
+        // Clear all tabs and create a fresh untitled tab
+        tabs_.clear();
+        active_tab_index_ = 0;
+        new_tab();
+        return true;
+    }
     
     // Navigation
     void next_tab() {

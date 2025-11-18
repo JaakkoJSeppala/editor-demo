@@ -28,10 +28,17 @@ Modern text editors struggle with large projects:
 ### Core Editor
 - ✅ **Piece Table** - O(1) insert/delete operations
 - ✅ **Virtual Scrolling** - constant-time rendering regardless of file size
-- ✅ **Full mouse support** - precise cursor positioning
+- ✅ **Full mouse support** - precise cursor positioning, drag selection
 - ✅ **File I/O** - open/save with native dialogs
 - ✅ **Auto-save prompt** - never lose your work
 - ✅ **Real-time performance stats** - monitor FPS and render times
+- ✅ **Undo/Redo** - full command pattern with Ctrl+Z/Y
+- ✅ **Find & Replace** - with inline editing and Replace All feedback
+- ✅ **Syntax Highlighting** - C++ token-based coloring
+- ✅ **Selection & Clipboard** - copy/cut/paste with Ctrl+C/X/V
+- ✅ **Multi-Tab Support** - tab bar with keyboard/mouse navigation, Ctrl+1-9 switching
+- ✅ **Line Numbers** - toggleable with F2
+- ✅ **Multi-Cursor Editing** - Ctrl+D for next occurrence, Ctrl+Click to add cursors
 
 ### Performance
 - ✅ Handles 100,000+ line files at 60fps
@@ -131,8 +138,24 @@ make -j$(sysctl -n hw.ncpu)
 |--------|----------|
 | Open file | `Ctrl+O` |
 | Save file | `Ctrl+S` |
-| Load demo (50k lines) | `Ctrl+L` |
+| Undo/Redo | `Ctrl+Z` / `Ctrl+Y` |
+| Find | `Ctrl+F` |
+| Replace | `Ctrl+H` |
+| Find next/previous | `F3` / `Shift+F3` |
+| Replace current | `Ctrl+R` |
+| Replace all | `Ctrl+Shift+R` |
+| Copy/Cut/Paste | `Ctrl+C/X/V` |
+| Select all | `Ctrl+A` |
+| Add next occurrence | `Ctrl+D` |
+| Add cursor (multi-cursor) | `Ctrl+Click` |
+| Clear multi-cursor | `ESC` |
+| New tab | `Ctrl+T` |
+| Close tab | `Ctrl+W` |
+| Switch tabs | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| Switch to tab 1-9 | `Ctrl+1-9` |
+| Toggle line numbers | `F2` |
 | Toggle stats | `F1` |
+| Load demo (50k lines) | `Ctrl+L` |
 | Scroll up/down | `↑/↓` or `Mouse Wheel` |
 | Page up/down | `PgUp/PgDn` |
 | Go to start/end | `Home/End` |
