@@ -1,0 +1,65 @@
+# Build directories
+build/
+build-debug/
+build-release/
+cmake-build-*/
+out/
+
+# Compiled binaries
+*.exe
+*.app
+*.out
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+
+# IDE and editor files
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Compiler output
+*.o
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.suo
+*.user
+*.ncb
+*.aps
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+*.orig
+
+# Package files
+*.zip
+*.tar.gz
+*.7z
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Debug files
+*.dmp
+core

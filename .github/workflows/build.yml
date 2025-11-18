@@ -1,0 +1,83 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build --config Release
+    
+    - name: Run console demo
+      run: |
+        cd build
+        ./editor_demo.exe
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: velocity-windows
+        path: |
+          build/editor_gui.exe
+          build/editor_demo.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build
+    
+    - name: Run console demo
+      run: |
+        cd build
+        ./editor_demo
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: velocity-linux
+        path: |
+          build/editor_demo
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+    
+    - name: Build
+      run: cmake --build build
+    
+    - name: Run console demo
+      run: |
+        cd build
+        ./editor_demo
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: velocity-macos
+        path: |
+          build/editor_demo
