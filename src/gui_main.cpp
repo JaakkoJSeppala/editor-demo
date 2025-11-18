@@ -1,5 +1,8 @@
 #include "piece_table.h"
 #include "viewport.h"
+#include "undo_manager.h"
+#include "find_dialog.h"
+#include "syntax_highlighter.h"
 #include <windows.h>
 #include <commdlg.h>
 #include <memory>
@@ -38,12 +41,20 @@ public:
         : hInstance_(hInstance)
         , document_(std::make_shared<PieceTable>())
         , viewport_(35, 100)
+        , undo_manager_(std::make_unique<UndoManager>(1000))
+        , find_dialog_(std::make_unique<FindDialog>())
+        , highlighter_(std::make_unique<SyntaxHighlighter>())
+        , show_find_(false)
+        , find_text_("")
         , show_stats_(true)
         , last_frame_time_(0)
         , current_file_("")
         , is_modified_(false)
         , cursor_visible_(true)
         , cursor_blink_time_(0)
+        , has_selection_(false)
+        , selection_start_(0)
+        , selection_end_(0)
         , char_width_(9)
         , char_height_(22)
     {
@@ -65,6 +76,9 @@ public:
             "  Arrow keys    - Scroll viewport\n"
             "  Ctrl+O        - Open file\n"
             "  Ctrl+S        - Save file\n"
+            "  Ctrl+Z/Ctrl+Y - Undo/Redo\n"
+            "  Ctrl+F        - Find text\n"
+            "  F3/Shift+F3   - Find next/previous\n"
             "  Ctrl+L        - Load 50,000 line demo file\n"
             "  F1            - Toggle performance stats\n"
             "  ESC           - Quit\n\n"
@@ -199,7 +213,20 @@ private:
                 
             case WM_LBUTTONDOWN:
                 on_mouse_click(LOWORD(lParam), HIWORD(lParam));
+                SetCapture(hwnd_); // Capture mouse for dragging
                 InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+                
+            case WM_LBUTTONUP:
+                ReleaseCapture();
+                return 0;
+                
+            case WM_MOUSEMOVE:
+                if (wParam & MK_LBUTTON) {
+                    // Dragging to select
+                    on_mouse_drag(LOWORD(lParam), HIWORD(lParam));
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                }
                 return 0;
                 
             case WM_MOUSEWHEEL:
@@ -295,16 +322,61 @@ private:
             std::wstring line_num_str = std::to_wstring(line_num + 1);
             TextOutW(memDC, 10, y, line_num_str.c_str(), line_num_str.length());
             
-            // Line content (white)
-            SetTextColor(memDC, RGB(220, 220, 220));
-            
-            // Convert to wide string
-            std::wstring wline;
-            for (char c : line) {
-                wline += static_cast<wchar_t>(c);
+            // Calculate line position in document
+            size_t line_start_pos = 0;
+            for (size_t i = 0; i < line_num; ++i) {
+                line_start_pos += document_->get_line(i).length() + 1;
             }
             
-            TextOutW(memDC, 80, y, wline.c_str(), wline.length());
+            // Tokenize line for syntax highlighting
+            auto tokens = highlighter_->tokenize_line(line);
+            
+            // Convert to wide string and render with selection highlighting and syntax colors
+            std::wstring wline;
+            for (size_t i = 0; i < line.length(); ++i) {
+                size_t char_pos = line_start_pos + i;
+                
+                // Check if character is in selection
+                if (has_selection_ && char_pos >= get_selection_start() && char_pos < get_selection_end()) {
+                    // Draw selection background
+                    RECT sel_rect = {
+                        static_cast<LONG>(80 + i * char_width_),
+                        y,
+                        static_cast<LONG>(80 + (i + 1) * char_width_),
+                        y + char_height_
+                    };
+                    HBRUSH selBrush = CreateSolidBrush(RGB(60, 60, 120));
+                    FillRect(memDC, &sel_rect, selBrush);
+                    DeleteObject(selBrush);
+                }
+                
+                wline += static_cast<wchar_t>(line[i]);
+            }
+            
+            // Render line with syntax highlighting
+            size_t last_pos = 0;
+            for (const auto& token : tokens) {
+                // Render any normal text before this token
+                if (token.start > last_pos) {
+                    SetTextColor(memDC, RGB(220, 220, 220));
+                    std::wstring segment = wline.substr(last_pos, token.start - last_pos);
+                    TextOutW(memDC, 80 + last_pos * char_width_, y, segment.c_str(), segment.length());
+                }
+                
+                // Render token with appropriate color
+                SetTextColor(memDC, token.get_color());
+                std::wstring segment = wline.substr(token.start, token.length);
+                TextOutW(memDC, 80 + token.start * char_width_, y, segment.c_str(), segment.length());
+                
+                last_pos = token.start + token.length;
+            }
+            
+            // Render any remaining text
+            if (last_pos < wline.length()) {
+                SetTextColor(memDC, RGB(220, 220, 220));
+                std::wstring segment = wline.substr(last_pos);
+                TextOutW(memDC, 80 + last_pos * char_width_, y, segment.c_str(), segment.length());
+            }
             
             // Draw cursor if on this line
             if (cursor_visible_ && line_num == get_cursor_line()) {
@@ -357,10 +429,26 @@ private:
         stats << L"View: " << viewport_.get_top_line() + 1 << L"\n";
         stats << L"Render: " << std::fixed << std::setprecision(2) 
               << viewport_.get_last_render_time_ms() << L"ms\n";
+        
+        if (show_find_) {
+            std::wstring wfind;
+            for (char c : find_text_) {
+                wfind += static_cast<wchar_t>(c);
+            }
+            stats << L"Find: " << wfind << L"\n";
+            if (find_dialog_->has_matches()) {
+                stats << L"Matches: " << (find_dialog_->get_current_match_index() + 1) 
+                      << L"/" << find_dialog_->get_match_count() << L"\n";
+            }
+        }
+        
         if (is_modified_) {
             stats << L"[Modified]\n";
         }
         stats << L"\nF1: Toggle stats";
+        if (show_find_) {
+            stats << L"\nF3: Find next";
+        }
         
         // Background
         RECT stats_rect = {
@@ -403,14 +491,27 @@ private:
     }
     
     void on_char(wchar_t ch) {
+        // If find mode is active, add to search string
+        if (show_find_ && ch >= 32 && ch < 127) {
+            char c = static_cast<char>(ch);
+            find_text_ += c;
+            perform_find();
+            return;
+        }
+        
         if (ch >= 32 || ch == L'\r' || ch == L'\n' || ch == L'\t') {
             char c = static_cast<char>(ch);
             if (ch == L'\r') c = '\n';
             if (ch == L'\t') c = ' ';
             
             std::string str(1, c);
-            document_->insert(cursor_pos_, str);
+            
+            // Use undo manager for insertion
+            auto cmd = std::make_unique<InsertCommand>(document_.get(), cursor_pos_, str);
+            undo_manager_->execute(std::move(cmd));
+            
             cursor_pos_++;
+            is_modified_ = true;
             
             // Reset cursor blink
             cursor_visible_ = true;
@@ -451,6 +552,11 @@ private:
             cursor_pos_ = document_->get_total_length();
         }
         
+        // Start new selection
+        has_selection_ = false;
+        selection_start_ = cursor_pos_;
+        selection_end_ = cursor_pos_;
+        
         // Reset cursor blink
         cursor_visible_ = true;
         cursor_blink_time_ = 0;
@@ -460,13 +566,58 @@ private:
                   << " (pos " << cursor_pos_ << ")\n";
     }
     
+    void on_mouse_drag(int x, int y) {
+        // Convert screen coordinates to position
+        if (x < 80) return;
+        
+        int line_index = (y - 10) / char_height_;
+        size_t clicked_line = viewport_.get_top_line() + line_index;
+        
+        if (clicked_line >= document_->get_line_count()) {
+            clicked_line = document_->get_line_count() > 0 ? document_->get_line_count() - 1 : 0;
+        }
+        
+        int col_index = (x - 80) / char_width_;
+        if (col_index < 0) col_index = 0;
+        
+        std::string line = document_->get_line(clicked_line);
+        if (col_index > static_cast<int>(line.length())) {
+            col_index = line.length();
+        }
+        
+        // Calculate new cursor position
+        size_t new_pos = 0;
+        for (size_t i = 0; i < clicked_line; ++i) {
+            new_pos += document_->get_line(i).length() + 1;
+        }
+        new_pos += col_index;
+        
+        // Update selection
+        cursor_pos_ = new_pos;
+        selection_end_ = new_pos;
+        has_selection_ = (selection_start_ != selection_end_);
+    }
+    
     void on_key_down(WPARAM key) {
         if (key == VK_ESCAPE) {
             SendMessage(hwnd_, WM_CLOSE, 0, 0);
         }
         else if (key == VK_BACK) {
+            // If in find mode, delete from search string
+            if (show_find_ && !find_text_.empty()) {
+                find_text_.pop_back();
+                if (!find_text_.empty()) {
+                    perform_find();
+                } else {
+                    find_dialog_->clear_matches();
+                }
+                return;
+            }
+            
             if (cursor_pos_ > 0) {
-                document_->remove(cursor_pos_ - 1, 1);
+                // Use undo manager for deletion
+                auto cmd = std::make_unique<DeleteCommand>(document_.get(), cursor_pos_ - 1, 1);
+                undo_manager_->execute(std::move(cmd));
                 cursor_pos_--;
                 is_modified_ = true;
                 update_title();
@@ -474,7 +625,25 @@ private:
         }
         else if (key == VK_DELETE) {
             if (cursor_pos_ < document_->get_total_length()) {
-                document_->remove(cursor_pos_, 1);
+                // Use undo manager for deletion
+                auto cmd = std::make_unique<DeleteCommand>(document_.get(), cursor_pos_, 1);
+                undo_manager_->execute(std::move(cmd));
+                is_modified_ = true;
+                update_title();
+            }
+        }
+        else if (key == L'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+Z - Undo
+            if (undo_manager_->can_undo()) {
+                undo_manager_->undo();
+                is_modified_ = true;
+                update_title();
+            }
+        }
+        else if (key == L'Y' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+Y - Redo
+            if (undo_manager_->can_redo()) {
+                undo_manager_->redo();
                 is_modified_ = true;
                 update_title();
             }
@@ -512,6 +681,46 @@ private:
         }
         else if (key == L'L' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             load_large_demo_file();
+        }
+        else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+F - Toggle find mode
+            show_find_ = !show_find_;
+            if (show_find_) {
+                find_text_.clear();
+                find_dialog_->clear_matches();
+            }
+        }
+        else if (key == L'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+A - Select all
+            selection_start_ = 0;
+            selection_end_ = document_->get_total_length();
+            has_selection_ = true;
+            cursor_pos_ = selection_end_;
+        }
+        else if (key == L'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+C - Copy
+            copy_to_clipboard();
+        }
+        else if (key == L'X' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+X - Cut
+            if (copy_to_clipboard()) {
+                delete_selection();
+            }
+        }
+        else if (key == L'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+V - Paste
+            paste_from_clipboard();
+        }
+        else if (key == VK_F3) {
+            // F3 - Find next
+            if (!find_text_.empty()) {
+                bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+                if (shift) {
+                    find_previous();
+                } else {
+                    find_next();
+                }
+            }
         }
         else if (key == VK_F1) {
             show_stats_ = !show_stats_;
@@ -713,6 +922,106 @@ private:
         return line;
     }
     
+    size_t get_selection_start() const {
+        return (std::min)(selection_start_, selection_end_);
+    }
+    
+    size_t get_selection_end() const {
+        return (std::max)(selection_start_, selection_end_);
+    }
+    
+    std::string get_selected_text() const {
+        if (!has_selection_) return "";
+        
+        size_t start = get_selection_start();
+        size_t end = get_selection_end();
+        return document_->get_text(start, end - start);
+    }
+    
+    bool copy_to_clipboard() {
+        if (!has_selection_) return false;
+        
+        std::string text = get_selected_text();
+        if (text.empty()) return false;
+        
+        if (!OpenClipboard(hwnd_)) {
+            std::cout << "Failed to open clipboard\n";
+            return false;
+        }
+        
+        EmptyClipboard();
+        
+        // Allocate global memory for the text
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
+        if (!hMem) {
+            CloseClipboard();
+            return false;
+        }
+        
+        // Copy text to allocated memory
+        char* pMem = static_cast<char*>(GlobalLock(hMem));
+        memcpy(pMem, text.c_str(), text.size() + 1);
+        GlobalUnlock(hMem);
+        
+        // Set clipboard data
+        SetClipboardData(CF_TEXT, hMem);
+        CloseClipboard();
+        
+        std::cout << "Copied " << text.size() << " characters to clipboard\n";
+        return true;
+    }
+    
+    void paste_from_clipboard() {
+        if (!OpenClipboard(hwnd_)) {
+            std::cout << "Failed to open clipboard\n";
+            return;
+        }
+        
+        HANDLE hData = GetClipboardData(CF_TEXT);
+        if (!hData) {
+            CloseClipboard();
+            return;
+        }
+        
+        char* pText = static_cast<char*>(GlobalLock(hData));
+        if (pText) {
+            std::string text(pText);
+            GlobalUnlock(hData);
+            
+            // Delete selection if any
+            if (has_selection_) {
+                delete_selection();
+            }
+            
+            // Insert text at cursor
+            auto cmd = std::make_unique<InsertCommand>(document_.get(), cursor_pos_, text);
+            undo_manager_->execute(std::move(cmd));
+            cursor_pos_ += text.length();
+            is_modified_ = true;
+            update_title();
+            
+            std::cout << "Pasted " << text.size() << " characters from clipboard\n";
+        }
+        
+        CloseClipboard();
+    }
+    
+    void delete_selection() {
+        if (!has_selection_) return;
+        
+        size_t start = get_selection_start();
+        size_t end = get_selection_end();
+        size_t length = end - start;
+        
+        auto cmd = std::make_unique<DeleteCommand>(document_.get(), start, length);
+        undo_manager_->execute(std::move(cmd));
+        
+        cursor_pos_ = start;
+        has_selection_ = false;
+        is_modified_ = true;
+        update_title();
+    }
+    
     size_t get_cursor_column() const {
         size_t pos = 0;
         
@@ -729,12 +1038,68 @@ private:
         return 0;
     }
     
+    void find_next() {
+        if (find_text_.empty()) return;
+        
+        std::string doc_text;
+        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+            doc_text += document_->get_line(i) + "\n";
+        }
+        
+        SearchMatch match;
+        if (find_dialog_->find_next(doc_text, find_text_, cursor_pos_ + 1, match)) {
+            cursor_pos_ = match.position;
+            viewport_.scroll_to_line(match.line);
+        }
+    }
+    
+    void find_previous() {
+        if (find_text_.empty()) return;
+        
+        std::string doc_text;
+        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+            doc_text += document_->get_line(i) + "\n";
+        }
+        
+        SearchMatch match;
+        if (find_dialog_->find_previous(doc_text, find_text_, cursor_pos_, match)) {
+            cursor_pos_ = match.position;
+            viewport_.scroll_to_line(match.line);
+        }
+    }
+    
+    void perform_find() {
+        if (find_text_.empty()) return;
+        
+        std::string doc_text;
+        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+            doc_text += document_->get_line(i) + "\n";
+        }
+        
+        auto matches = find_dialog_->find_all(doc_text, find_text_);
+        find_dialog_->set_matches(matches);
+        
+        if (find_dialog_->has_matches()) {
+            const SearchMatch* match = find_dialog_->get_current_match();
+            if (match) {
+                cursor_pos_ = match->position;
+                viewport_.scroll_to_line(match->line);
+            }
+        }
+    }
+    
     HINSTANCE hInstance_;
     HWND hwnd_ = nullptr;
     HFONT hFont_ = nullptr;
     
     std::shared_ptr<PieceTable> document_;
     Viewport viewport_;
+    std::unique_ptr<UndoManager> undo_manager_;
+    std::unique_ptr<FindDialog> find_dialog_;
+    std::unique_ptr<SyntaxHighlighter> highlighter_;
+    
+    bool show_find_;
+    std::string find_text_;
     
     size_t cursor_pos_ = 0;
     bool show_stats_;
@@ -747,6 +1112,10 @@ private:
     
     bool cursor_visible_;
     int cursor_blink_time_;
+    
+    bool has_selection_;
+    size_t selection_start_;
+    size_t selection_end_;
     
     int char_width_;   // Actual character width from font metrics
     int char_height_;  // Actual character height from font metrics
