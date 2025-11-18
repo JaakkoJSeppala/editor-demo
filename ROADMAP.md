@@ -179,11 +179,11 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Effort:** 2 weeks
 
 ### Code Folding
-- [ ] Detect foldable regions (braces, indentation)
-- [ ] Fold/unfold controls in gutter
-- [ ] Keyboard shortcuts
-- [ ] Fold all/unfold all
-- [ ] Remember folding state
+- [x] Detect foldable regions (braces, indentation)
+- [x] Fold/unfold controls in gutter
+- [x] Keyboard shortcuts
+- [x] Fold all/unfold all
+- [x] Remember folding state
 - **Priority:** 🟢 Nice to have
 - **Effort:** 2 weeks
 

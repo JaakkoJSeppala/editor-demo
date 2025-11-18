@@ -7,6 +7,7 @@
 #include "tab_manager.h"
 #include "file_tree.h"
 #include "workspace.h"
+#include "code_folding.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -55,6 +56,7 @@ public:
         , undo_manager_(std::make_unique<UndoManager>(1000))
         , find_dialog_(std::make_unique<FindDialog>())
         , highlighter_(std::make_unique<SyntaxHighlighter>())
+        , folding_manager_(std::make_unique<CodeFoldingManager>())
         , show_file_tree_(true)
         , tree_panel_width_(260)
         , show_find_(false)
@@ -837,6 +839,12 @@ private:
         int base_left = get_content_left();
         
         for (const auto& line : visible_lines) {
+            // Skip folded lines
+            if (folding_manager_ && !folding_manager_->is_line_visible(line_num)) {
+                line_num++;
+                continue;
+            }
+            
             // Line number (gray) - only if enabled
             int text_x_offset = base_left; // Default offset when line numbers are hidden
             if (show_line_numbers_) {
@@ -868,6 +876,36 @@ private:
                 int num_x = gutter_right - num_sz.cx - 4; // small padding
                 SetTextColor(memDC, RGB(100, 100, 120));
                 TextOutW(memDC, num_x, y, line_num_str.c_str(), (int)line_num_str.length());
+                
+                // Draw fold control if region exists at this line
+                if (folding_manager_) {
+                    const auto* region = folding_manager_->get_region_at_line(line_num);
+                    if (region && region->line_count() > 1) {
+                        // Draw fold indicator (triangle or +/-)
+                        int fold_x = base_left + 4;
+                        int fold_y = y + char_height_ / 2;
+                        int fold_size = 6;
+                        
+                        HPEN foldPen = CreatePen(PS_SOLID, 1, RGB(150, 150, 160));
+                        HPEN oldPen = (HPEN)SelectObject(memDC, foldPen);
+                        
+                        if (region->is_folded) {
+                            // Draw + sign (folded)
+                            MoveToEx(memDC, fold_x, fold_y, nullptr);
+                            LineTo(memDC, fold_x + fold_size, fold_y);
+                            MoveToEx(memDC, fold_x + fold_size/2, fold_y - fold_size/2, nullptr);
+                            LineTo(memDC, fold_x + fold_size/2, fold_y + fold_size/2);
+                        } else {
+                            // Draw - sign (expanded)
+                            MoveToEx(memDC, fold_x, fold_y, nullptr);
+                            LineTo(memDC, fold_x + fold_size, fold_y);
+                        }
+                        
+                        SelectObject(memDC, oldPen);
+                        DeleteObject(foldPen);
+                    }
+                }
+                
                 text_x_offset = base_left + 70; // Offset for text when line numbers are shown
             }
             
@@ -1782,6 +1820,20 @@ private:
 
         // Convert screen coordinates to line/column
         int text_offset = (show_line_numbers_ ? 70 : 0) + get_content_left();
+        
+        // Check if clicked in fold control area
+        int gutter_left = get_content_left();
+        if (show_line_numbers_ && x >= gutter_left && x < gutter_left + 20) {
+            int line_index = (y - get_content_top()) / char_height_;
+            size_t clicked_line = viewport_.get_top_line() + line_index;
+            if (clicked_line < document_->get_line_count() && folding_manager_) {
+                if (folding_manager_->toggle_fold(clicked_line)) {
+                    InvalidateRect(hwnd_, nullptr, TRUE);
+                    return;
+                }
+            }
+        }
+        
         if (x < text_offset) return; // Clicked on line numbers area or margin
         
         int line_index = (y - get_content_top()) / char_height_;
@@ -2043,6 +2095,29 @@ private:
         }
         else if (key == VK_END) {
             cursor_pos_ = document_->get_total_length();
+        }
+        else if (key == VK_OEM_4 && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+[ - Fold region at cursor
+            size_t line = get_cursor_line();
+            if (folding_manager_->toggle_fold(line)) {
+                InvalidateRect(hwnd_, nullptr, TRUE);
+            }
+        }
+        else if (key == VK_OEM_6 && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+] - Unfold region at cursor
+            size_t line = get_cursor_line();
+            folding_manager_->unfold(line);
+            InvalidateRect(hwnd_, nullptr, TRUE);
+        }
+        else if (key == L'0' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_MENU) & 0x8000)) {
+            // Ctrl+Alt+0 - Fold all (using Alt instead of K for simplicity)
+            folding_manager_->fold_all();
+            InvalidateRect(hwnd_, nullptr, TRUE);
+        }
+        else if (key == L'9' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_MENU) & 0x8000)) {
+            // Ctrl+Alt+9 - Unfold all
+            folding_manager_->unfold_all();
+            InvalidateRect(hwnd_, nullptr, TRUE);
         }
         else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
             // Ctrl+Shift+F - Toggle Project-wide Search panel
@@ -2556,6 +2631,25 @@ private:
         SetWindowTextW(hwnd_, title.c_str());
     }
     
+    void refresh_folding() {
+        if (!folding_manager_ || !document_) return;
+        
+        // Get all lines from document
+        std::vector<std::string> lines;
+        for (size_t i = 0; i < document_->get_line_count(); ++i) {
+            lines.push_back(document_->get_line(i));
+        }
+        
+        // Save current fold state
+        auto fold_state = folding_manager_->get_fold_state();
+        
+        // Re-analyze document
+        folding_manager_->analyze_document(lines);
+        
+        // Restore previous fold state where possible
+        folding_manager_->restore_fold_state(fold_state);
+    }
+    
     size_t get_cursor_line() const {
         size_t pos = 0;
         size_t line = 0;
@@ -2923,6 +3017,7 @@ private:
     std::unique_ptr<UndoManager> undo_manager_;
     std::unique_ptr<FindDialog> find_dialog_;
     std::unique_ptr<SyntaxHighlighter> highlighter_;
+    std::unique_ptr<CodeFoldingManager> folding_manager_;
     
     bool show_file_tree_;
     int tree_panel_width_;
@@ -3130,6 +3225,7 @@ private:
             }
             update_title();
         }
+        refresh_folding();
         InvalidateRect(hwnd_, nullptr, TRUE);
     }
     
