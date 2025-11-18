@@ -3,6 +3,7 @@
 #include "undo_manager.h"
 #include "find_dialog.h"
 #include "syntax_highlighter.h"
+#include "tab_manager.h"
 #include <windows.h>
 #include <commdlg.h>
 #include <memory>
