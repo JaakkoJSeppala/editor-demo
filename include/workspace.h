@@ -352,9 +352,12 @@ inline void WorkspaceManager::clear_recent_workspaces() {
 
 inline std::string WorkspaceManager::get_config_dir() const {
 #ifdef _WIN32
-    const char* appdata = getenv("APPDATA");
-    if (appdata) {
-        return std::string(appdata) + "\\Velocity";
+    char* appdata = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&appdata, &len, "APPDATA") == 0 && appdata) {
+        std::string path = std::string(appdata) + "\\Velocity";
+        free(appdata);
+        return path;
     }
     return ".";
 #else

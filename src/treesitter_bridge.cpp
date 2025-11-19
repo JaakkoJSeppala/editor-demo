@@ -122,10 +122,51 @@ bool TreeSitterBridge::get_line_tokens(size_t line_index, std::vector<Token>& ou
 
         Token::Type tokType = Token::NORMAL;
         std::string typeStr(t);
-        if (typeStr.find("comment") != std::string::npos) tokType = Token::COMMENT;
-        else if (typeStr.find("string") != std::string::npos) tokType = Token::STRING;
-        else if (typeStr.rfind("preproc", 0) == 0 || typeStr.find("preproc") != std::string::npos) tokType = Token::PREPROCESSOR;
-        else if (typeStr.find("number") != std::string::npos || typeStr.find("float") != std::string::npos || typeStr.find("integer") != std::string::npos) tokType = Token::NUMBER;
+        
+        // Map Tree-sitter node types to our Token types
+        if (typeStr.find("comment") != std::string::npos) {
+            tokType = Token::COMMENT;
+        }
+        else if (typeStr.find("string") != std::string::npos || 
+                 typeStr.find("template_string") != std::string::npos ||
+                 typeStr.find("char_literal") != std::string::npos) {
+            tokType = Token::STRING;
+        }
+        else if (typeStr.rfind("preproc", 0) == 0 || 
+                 typeStr.find("preproc") != std::string::npos ||
+                 typeStr == "import_statement" ||
+                 typeStr == "package_declaration") {
+            tokType = Token::PREPROCESSOR;
+        }
+        else if (typeStr.find("number") != std::string::npos || 
+                 typeStr.find("float") != std::string::npos || 
+                 typeStr.find("integer") != std::string::npos ||
+                 typeStr == "true" || typeStr == "false" || typeStr == "null" ||
+                 typeStr == "None" || typeStr == "True" || typeStr == "False") {
+            tokType = Token::NUMBER;
+        }
+        // Keywords and language constructs
+        else if (typeStr == "if" || typeStr == "else" || typeStr == "while" || typeStr == "for" ||
+                 typeStr == "return" || typeStr == "class" || typeStr == "function" || typeStr == "def" ||
+                 typeStr == "import" || typeStr == "from" || typeStr == "const" || typeStr == "let" ||
+                 typeStr == "var" || typeStr == "async" || typeStr == "await" || typeStr == "yield" ||
+                 typeStr == "lambda" || typeStr == "try" || typeStr == "except" || typeStr == "finally" ||
+                 typeStr == "switch" || typeStr == "case" || typeStr == "break" || typeStr == "continue" ||
+                 typeStr == "public" || typeStr == "private" || typeStr == "protected" || typeStr == "static" ||
+                 typeStr == "virtual" || typeStr == "override" || typeStr == "namespace" || typeStr == "using" ||
+                 typeStr == "template" || typeStr == "typename" || typeStr == "struct" || typeStr == "enum" ||
+                 typeStr == "interface" || typeStr == "type" || typeStr == "fn" || typeStr == "impl" ||
+                 typeStr == "trait" || typeStr == "mod" || typeStr == "pub" || typeStr == "use") {
+            tokType = Token::KEYWORD;
+        }
+        // Primitive types
+        else if (typeStr == "int" || typeStr == "float" || typeStr == "double" || typeStr == "char" ||
+                 typeStr == "bool" || typeStr == "void" || typeStr == "string" || typeStr == "auto" ||
+                 typeStr == "long" || typeStr == "short" || typeStr == "unsigned" || typeStr == "signed" ||
+                 typeStr.find("_type") != std::string::npos ||
+                 typeStr == "primitive_type" || typeStr == "type_identifier") {
+            tokType = Token::KEYWORD;
+        }
 
         if (tokType != Token::NORMAL) {
             uint32_t ns = ts_node_start_byte(n);

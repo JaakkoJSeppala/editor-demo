@@ -34,11 +34,21 @@ Modern text editors struggle with large projects:
 - ✅ **Real-time performance stats** - monitor FPS and render times
 - ✅ **Undo/Redo** - full command pattern with Ctrl+Z/Y
 - ✅ **Find & Replace** - with inline editing and Replace All feedback
-- ✅ **Syntax Highlighting** - C++ token-based coloring
+- ✅ **Multi-language Syntax Highlighting** - C/C++, Python, JavaScript, TypeScript, JSON, YAML, Markdown
+- ✅ **Tree-sitter Integration** - structural parsing for 8 languages with runtime toggle
 - ✅ **Selection & Clipboard** - copy/cut/paste with Ctrl+C/X/V
 - ✅ **Multi-Tab Support** - tab bar with keyboard/mouse navigation, Ctrl+1-9 switching
-- ✅ **Line Numbers** - toggleable with F2
-- ✅ **Multi-Cursor Editing** - Ctrl+D for next occurrence, Ctrl+Click to add cursors
+- ✅ **Line Numbers** - toggleable with F2, relative line numbers
+- ✅ **Split View** - horizontal/vertical splits with synchronized scrolling
+- ✅ **File Tree** - directory navigation with collapsible folders
+- ✅ **Workspace Management** - save/load workspace state, recent files
+
+### Advanced Editing (Phase 3)
+- ✅ **Multiple Cursors** - Ctrl+D for next occurrence, Ctrl+Click to add, Ctrl+Shift+L select all
+- ✅ **Column Selection** - Alt+Shift+Drag for rectangular selection
+- ✅ **Code Folding** - fold/unfold regions, gutter controls, keyboard shortcuts
+- ✅ **Minimap** - document overview with syntax preview, click to scroll (Ctrl+M to toggle)
+- ✅ **Word-based Autocomplete** - frequency-based suggestions with arrow navigation
 
 ### Performance
 - ✅ Handles 100,000+ line files at 60fps
@@ -134,32 +144,70 @@ make -j$(sysctl -n hw.ncpu)
 
 ### Keyboard Shortcuts
 
+#### File Operations
 | Action | Shortcut |
 |--------|----------|
 | Open file | `Ctrl+O` |
 | Save file | `Ctrl+S` |
+| New tab | `Ctrl+T` |
+| Close tab | `Ctrl+W` |
+| Close all tabs | `Ctrl+Shift+W` |
+| Recent files | `Ctrl+R` |
+
+#### Editing
+| Action | Shortcut |
+|--------|----------|
 | Undo/Redo | `Ctrl+Z` / `Ctrl+Y` |
+| Copy/Cut/Paste | `Ctrl+C/X/V` |
+| Select all | `Ctrl+A` |
+| Delete line | `Ctrl+Shift+K` |
+
+#### Search & Replace
+| Action | Shortcut |
+|--------|----------|
 | Find | `Ctrl+F` |
 | Replace | `Ctrl+H` |
 | Find next/previous | `F3` / `Shift+F3` |
-| Replace current | `Ctrl+R` |
-| Replace all | `Ctrl+Shift+R` |
-| Copy/Cut/Paste | `Ctrl+C/X/V` |
-| Select all | `Ctrl+A` |
+| Find in files | `Ctrl+Shift+F` |
+
+#### Multi-Cursor
+| Action | Shortcut |
+|--------|----------|
+| Add cursor | `Ctrl+Click` |
 | Add next occurrence | `Ctrl+D` |
-| Add cursor (multi-cursor) | `Ctrl+Click` |
+| Select all occurrences | `Ctrl+Shift+L` |
+| Column selection | `Alt+Shift+Drag` |
 | Clear multi-cursor | `ESC` |
-| New tab | `Ctrl+T` |
-| Close tab | `Ctrl+W` |
+
+#### Navigation & View
+| Action | Shortcut |
+|--------|----------|
 | Switch tabs | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
-| Switch to tab 1-9 | `Ctrl+1-9` |
+| Go to tab 1-9 | `Ctrl+1-9` |
+| Split horizontal | `Ctrl+\` |
+| Split vertical | `Ctrl+Shift+\` |
+| Close split | `Ctrl+K W` |
+| Sync scrolling | `Ctrl+K S` |
 | Toggle line numbers | `F2` |
+| Toggle minimap | `Ctrl+M` |
 | Toggle stats | `F1` |
+| Toggle file tree | `Ctrl+B` |
+
+#### Code Folding
+| Action | Shortcut |
+|--------|----------|
+| Fold region | `Ctrl+Shift+[` |
+| Unfold region | `Ctrl+Shift+]` |
+| Fold all | `Ctrl+K Ctrl+0` |
+| Unfold all | `Ctrl+K Ctrl+J` |
+
+#### Advanced
+| Action | Shortcut |
+|--------|----------|
+| Toggle Tree-sitter | `Ctrl+Shift+T` |
+| Autocomplete | `Ctrl+Space` |
+| Accept autocomplete | `Tab` or `Enter` |
 | Load demo (50k lines) | `Ctrl+L` |
-| Scroll up/down | `↑/↓` or `Mouse Wheel` |
-| Page up/down | `PgUp/PgDn` |
-| Go to start/end | `Home/End` |
-| Quit | `ESC` |
 
 ### Mouse Controls
 - **Left click** - Position cursor

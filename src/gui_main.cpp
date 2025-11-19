@@ -890,7 +890,6 @@ private:
                 // Right-align numbers in gutter
                 SIZE num_sz{};
                 GetTextExtentPoint32W(memDC, line_num_str.c_str(), (int)line_num_str.length(), &num_sz);
-                int gutter_left = base_left;
                 int gutter_right = base_left + 70;
                 int num_x = gutter_right - num_sz.cx - 4; // small padding
                 SetTextColor(memDC, RGB(100, 100, 120));
@@ -1125,7 +1124,6 @@ private:
         int x = view_left - tab_scroll_offset_;
         int y = 10;
         int padding_x = 12;
-        int padding_y = 6;
         int gap = 6;
         size_t count = tab_manager_->get_tab_count();
         int total_width = 0;
@@ -2624,7 +2622,6 @@ private:
         else if (key == L'W' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+W - Close tab
             if (tab_manager_) {
-                size_t before = tab_manager_->get_tab_count();
                 size_t cur = tab_manager_->get_active_tab_index();
                 if (tab_manager_->close_tab(cur)) {
                     size_t newIndex = cur;
@@ -3121,7 +3118,7 @@ private:
             }
             
             // Switch to the previously active tab
-            if (tab_manager_ && state.active_tab_index < tab_manager_->get_all_tabs().size()) {
+            if (tab_manager_ && static_cast<size_t>(state.active_tab_index) < tab_manager_->get_all_tabs().size()) {
                 switch_to_tab(state.active_tab_index);
             }
         }
