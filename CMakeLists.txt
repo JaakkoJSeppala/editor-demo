@@ -91,6 +91,7 @@ if(WIN32)
         src/plugin_manager.cpp
         src/platform_file.cpp
         src/platform_process.cpp
+        src/gpu_renderer.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)
@@ -236,6 +237,7 @@ elseif(UNIX AND NOT APPLE)
         src/plugin_manager.cpp
         src/platform_file.cpp
         src/platform_process.cpp
+        src/gpu_renderer.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json ${GTK4_INCLUDE_DIRS})
@@ -323,6 +325,7 @@ elseif(APPLE)
         src/plugin_manager.cpp
         src/platform_file.cpp
         src/platform_process.cpp
+        src/gpu_renderer.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)

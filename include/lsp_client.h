@@ -82,7 +82,7 @@ public:
     // Process incoming messages (call periodically)
     void process_messages();
 
-private:
+public:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 

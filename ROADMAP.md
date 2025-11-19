@@ -561,12 +561,6 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - ✅ Memory usage: < 200MB for typical project
 - ✅ Search 10k files: < 2 seconds
 
-### Adoption Goals (2028)
-- 🎯 10,000 GitHub stars
-- 🎯 1,000 active daily users
-- 🎯 100 community extensions
-- 🎯 10 corporate sponsors
-- 🎯 Featured on Hacker News top 10
 
 ### Quality Targets
 - 🎯 99.9% crash-free rate

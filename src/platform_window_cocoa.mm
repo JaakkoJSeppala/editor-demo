@@ -76,7 +76,17 @@ public:
             
             // Register in map
             window_map_[window_] = this;
-            
+
+            // Initialize GPU renderer
+            editor::GpuRendererConfig gpu_cfg;
+            gpu_cfg.backend = editor::GpuBackend::Auto;
+            gpu_cfg.width = width_;
+            gpu_cfg.height = height_;
+            gpu_cfg.enable_vsync = true;
+            gpu_cfg.debug = true;
+            gpu_renderer_.reset(editor::GpuRenderer::create(gpu_cfg));
+            if (gpu_renderer_) gpu_renderer_->initialize(gpu_cfg);
+
             return true;
         }
     }
@@ -358,6 +368,15 @@ public:
             on_paint(event);
         }
         
+        // GPU renderer test (stub)
+        if (gpu_renderer_) {
+            gpu_renderer_->begin_frame();
+            gpu_renderer_->draw_rect(10, 10, 200, 100, 0xFF00FF00); // Green rect
+            gpu_renderer_->draw_text("GPU Test", 30, 50, 0xFFFFFFFF); // White text
+            gpu_renderer_->draw_line(10, 10, 210, 110, 0xFFFF0000); // Red line
+            gpu_renderer_->end_frame();
+            gpu_renderer_->present();
+        }
         graphics_context_ = nullptr;
     }
 

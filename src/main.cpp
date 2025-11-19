@@ -225,7 +225,30 @@ void print_architecture_summary() {
     std::cout << "   - Incremental parsing for syntax highlighting\n\n";
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    bool bench_mode = false;
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--bench" || arg == "--autotest") {
+            bench_mode = true;
+        }
+    }
+
+    if (bench_mode) {
+        std::cout << "\n[Bench Mode] Running automated performance tests...\n";
+        print_separator();
+        demo_piece_table();
+        print_separator();
+        demo_viewport();
+        print_separator();
+        demo_indexer();
+        print_separator();
+        print_architecture_summary();
+        std::cout << "\n[Bench Mode] All tests complete. See metrics above.\n";
+        return 0;
+    }
+
+    // ...existing code...
     std::cout << "\n";
     std::cout << "╔════════════════════════════════════════════════════════════════════╗\n";
     std::cout << "║                                                                    ║\n";
@@ -235,21 +258,15 @@ int main() {
     std::cout << "║  (Alternative to VS Code for million-line codebases)              ║\n";
     std::cout << "║                                                                    ║\n";
     std::cout << "╚════════════════════════════════════════════════════════════════════╝\n";
-    
     print_separator();
     demo_piece_table();
-    
     print_separator();
     demo_viewport();
-    
     print_separator();
     demo_indexer();
-    
     print_separator();
     print_architecture_summary();
-    
     std::cout << "Demo completed! Check the performance metrics above.\n";
     std::cout << "This demonstrates why native editors outperform web-based ones.\n\n";
-    
     return 0;
 }

@@ -5,6 +5,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <cstdint>
 #include <process.h>
 #else
 #include <unistd.h>
@@ -469,7 +470,7 @@ bool ProcessUtils::execute(const std::string& executable,
     output.clear();
     std::string chunk;
     while (process.is_running()) {
-        if (process.read_stdout(chunk, 100)) {
+        if (process.read_stdout(chunk, 10)) {
             output += chunk;
         }
     }

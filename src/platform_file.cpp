@@ -267,7 +267,8 @@ bool PlatformFile::set_permissions(const std::string& path, FilePermission permi
 
 bool PlatformFile::is_readable(const std::string& path) {
 #ifdef _WIN32
-    return _access(path.c_str(), 4) == 0; // R_OK = 4
+    std::wstring wpath(path.begin(), path.end());
+    return _waccess(wpath.c_str(), 4) == 0; // R_OK = 4
 #else
     return access(path.c_str(), R_OK) == 0;
 #endif
@@ -275,7 +276,8 @@ bool PlatformFile::is_readable(const std::string& path) {
 
 bool PlatformFile::is_writable(const std::string& path) {
 #ifdef _WIN32
-    return _access(path.c_str(), 2) == 0; // W_OK = 2
+    std::wstring wpath(path.begin(), path.end());
+    return _waccess(wpath.c_str(), 2) == 0; // W_OK = 2
 #else
     return access(path.c_str(), W_OK) == 0;
 #endif

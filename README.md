@@ -120,6 +120,26 @@ Modern text editors struggle with large projects:
 - Kaikki ydintoiminnot pysyvät nopeina riippumatta tiedoston koosta.
 - Web-pohjaiset editorit hidastuvat DOM:n ja GC:n vuoksi – Velocity käyttää natiivia koodia ja GPU:ta.
 
+
+## 🆕 Recent Changes (Nov 2025)
+
+### RopeTable Data Structure
+- Added RopeTable for scalable text editing, optimized for very large files and fast insert/delete operations.
+- Benchmarks show RopeTable handles 100,000+ inserts in milliseconds.
+
+### RefactorAPI (Advanced Refactoring)
+- New RefactorAPI module: supports symbol renaming, code cleanup, and extensible refactoring via LSP.
+- Example usage and tests included in `src/editor_test.cpp`.
+
+### Automated Tests & Benchmarks
+- `src/editor_test.cpp` now includes RopeTable benchmarks and RefactorAPI command tests.
+- To build and run all tests:
+   ```sh
+   g++ -std=c++17 -Iinclude src/editor_test.cpp src/platform_file.cpp src/platform_process.cpp src/gpu_renderer.cpp src/rope_table.cpp src/lsp_client.cpp src/refactor_api.cpp -o editor_test.exe
+   ./editor_test.exe
+   ```
+- Output includes performance results and refactoring command status.
+
 ## 🛠️ Architecture
 
 ```

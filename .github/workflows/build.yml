@@ -22,6 +22,12 @@ jobs:
       run: |
         cd build
         ./editor_demo.exe
+
+    - name: Run automated performance test (bench mode)
+      run: |
+        cd ..
+        g++ -std=c++17 -Iinclude src/main.cpp src/piece_table.cpp src/viewport.cpp src/indexer.cpp -o bench_test.exe
+        ./bench_test.exe --bench
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
@@ -51,6 +57,11 @@ jobs:
       run: |
         cd build
         ./editor_demo
+
+    - name: Run automated performance test (bench mode)
+      run: |
+        g++ -std=c++17 -Iinclude src/main.cpp src/piece_table.cpp src/viewport.cpp src/indexer.cpp -o bench_test
+        ./bench_test --bench
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
@@ -74,6 +85,11 @@ jobs:
       run: |
         cd build
         ./editor_demo
+
+    - name: Run automated performance test (bench mode)
+      run: |
+        g++ -std=c++17 -Iinclude src/main.cpp src/piece_table.cpp src/viewport.cpp src/indexer.cpp -o bench_test
+        ./bench_test --bench
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v3

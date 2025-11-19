@@ -1,65 +1,100 @@
+// Standard library includes
+#include <string>
+#include <vector>
+#include <cstddef>
+#include <fstream>
+#include <memory>
+#include <system_error>
+#include <utility>
+#include <cstring>
+#include <iostream>
+#include <chrono>
+#include <mutex>
+#include <future>
+#include <thread>
+#include <atomic>
+
+// Windows includes
+#include <windows.h>
+#include <commctrl.h>
 #include "piece_table.h"
 #include "viewport.h"
-#include "undo_manager.h"
-#include "find_dialog.h"
-#include "workspace.h"
-#include "syntax_highlighter.h"
 #include "tab_manager.h"
-#include "file_tree.h"
 #include "workspace.h"
-#include "code_folding.h"
-#include "minimap.h"
-#include "autocomplete.h"
+#include "plugin_manager.h"
+#include "plugin_api.h"
+#include "syntax_highlighter.h"
+#include "find_dialog.h"
+#include "theme.h"
+#include "terminal.h"
 #include "lsp_client.h"
 #include "git_integration.h"
-#include "terminal.h"
-#include "theme.h"
-#include <windows.h>
-#include <windowsx.h>
-#include <commdlg.h>
-#include <commctrl.h>
-#include <memory>
-#include <iostream>
-#include <sstream>
-#include <iomanip>
-#include <future>
-#include <mutex>
-#include <atomic>
-#include <chrono>
-#include <fstream>
-#include <algorithm>
-#include <vector>
+#include "code_folding.h"
+#include "file_tree.h"
+#include "undo_manager.h"
 
-/**
- * High-Performance Text Editor - Native Win32 GUI
- * 
- * Features:
- * - Native Win32 rendering (no external dependencies)
- * - Real-time editing with piece table
- * - Virtual scrolling for million-line files
- * - Hardware-accelerated text rendering
- * - File open/save with Win32 dialogs
- * - Full mouse support with cursor positioning
- * 
- * Controls:
- * - Type to insert text
- * - Backspace/Delete to remove text
- * - Arrow keys to scroll
- * - Mouse click to position cursor
- * - Mouse wheel to scroll
- * - Ctrl+O to open file
- * - Ctrl+S to save file
- * - Ctrl+L to load 50,000 line demo file
- * - F1 to toggle performance stats
- */
-
-class Win32TextEditor {
 public:
-    Win32TextEditor(HINSTANCE hInstance) 
-        : hInstance_(hInstance)
-        , document_(std::make_shared<PieceTable>())
-        , viewport_(35, 100)
-        , undo_manager_(std::make_unique<UndoManager>(1000))
+    enum class SplitMode { None, Horizontal, Vertical };
+    struct SplitPane {
+        std::shared_ptr<PieceTable> document;
+        Viewport viewport{35, 100};
+        int cursor_pos = 0;
+        bool has_selection = false;
+        size_t selection_start = 0;
+        size_t selection_end = 0;
+        std::string file_path;
+        bool is_modified = false;
+        std::vector<int> extra_cursors;
+    };
+    Win32TextEditor(HINSTANCE hInstance);
+private:
+    SplitPane pane1_;
+    SplitPane pane2_;
+    SplitMode split_mode_;
+    int active_pane_;
+    int splitter_pos_;
+    bool dragging_splitter_;
+    bool sync_scrolling_;
+    std::vector<int> extra_cursors_;
+    int cursor_pos_;
+    HWND hwnd_;
+    std::unique_ptr<GitManager> git_manager_;
+    std::shared_ptr<PieceTable> document_;
+    Viewport viewport_;
+    std::unique_ptr<UndoManager> undo_manager_;
+    std::unique_ptr<FindDialog> find_dialog_;
+    std::unique_ptr<SyntaxHighlighter> highlighter_;
+    std::unique_ptr<CodeFoldingManager> folding_manager_;
+    std::unique_ptr<Minimap> minimap_;
+    bool show_file_tree_;
+    int tree_panel_width_;
+    bool show_find_;
+    bool show_replace_;
+    std::string find_text_;
+    std::string replace_text_;
+    bool show_terminal_;
+    int terminal_panel_height_;
+    std::string terminal_input_;
+    int terminal_input_cursor_;
+    bool show_stats_;
+    bool show_line_numbers_;
+    bool relative_line_numbers_;
+    bool replace_edit_find_;
+    double last_frame_time_;
+    std::string current_file_;
+    bool is_modified_;
+    bool cursor_visible_;
+    int cursor_blink_time_;
+    bool has_selection_;
+    size_t selection_start_;
+    size_t selection_end_;
+    int char_width_;
+    int char_height_;
+    bool dragging_tab_;
+    size_t drag_tab_index_;
+    size_t hover_tab_index_;
+    int tab_scroll_offset_;
+
         , find_dialog_(std::make_unique<FindDialog>())
         , highlighter_(std::make_unique<SyntaxHighlighter>())
         , folding_manager_(std::make_unique<CodeFoldingManager>())
@@ -129,9 +164,20 @@ public:
             "===============================================\n\n"
             "Architecture:\n"
             "- Piece Table: O(1) insert/delete operations\n"
+                , gpu_renderer_(nullptr)
             "- Virtual Scrolling: Only renders visible lines\n"
             "- Native Win32: No web tech overhead\n"
             "- C++ Syntax Highlighting with token coloring\n\n"
+
+                // Initialize GPU renderer
+                editor::GpuRendererConfig gpu_cfg;
+                gpu_cfg.backend = editor::GpuBackend::Auto;
+                gpu_cfg.width = 1200;
+                gpu_cfg.height = 800;
+                gpu_cfg.enable_vsync = true;
+                gpu_cfg.debug = true;
+                gpu_renderer_.reset(editor::GpuRenderer::create(gpu_cfg));
+                if (gpu_renderer_) gpu_renderer_->initialize(gpu_cfg);
             "Try typing - notice zero latency even with large files!\n\n"
             "Controls:\n"
             "  Type          - Insert text\n"
@@ -274,20 +320,37 @@ public:
         // Start FPS counter timer
         SetTimer(hwnd_, 2, 100, nullptr);
         
+        // Suorituskykylokin tiedosto
+        FILE* perf_log = fopen("performance_log.txt", "a");
+        if (perf_log) {
+            fprintf(perf_log, "Startup: %lld ms\n", (long long)(last_time.QuadPart * 1000 / frequency.QuadPart));
+        }
+
+        int frame_count = 0;
+        double total_frame_time = 0.0;
+
         while (GetMessage(&msg, nullptr, 0, 0)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
-            
-            // Calculate FPS only periodically
+
             QueryPerformanceCounter(&current_time);
             double delta = static_cast<double>(current_time.QuadPart - last_time.QuadPart) / frequency.QuadPart;
-            if (delta > 0.001) { // Update every 1ms minimum
+            if (delta > 0.001) {
                 last_frame_time_ = delta * 1000.0;
                 fps_ = 1.0 / delta;
                 last_time = current_time;
+                frame_count++;
+                total_frame_time += last_frame_time_;
+                if (perf_log && frame_count % 100 == 0) {
+                    fprintf(perf_log, "Frame %d: %.2f ms, FPS: %.2f\n", frame_count, last_frame_time_, fps_);
+                }
             }
         }
-        
+
+        if (perf_log) {
+            fprintf(perf_log, "Average frame time: %.2f ms\n", frame_count ? total_frame_time / frame_count : 0.0);
+            fclose(perf_log);
+        }
         KillTimer(hwnd_, 1);
         KillTimer(hwnd_, 2);
         return static_cast<int>(msg.wParam);
@@ -300,6 +363,7 @@ private:
     
     // Tabs
     std::unique_ptr<TabManager> tab_manager_;
+    std::unique_ptr<editor::GpuRenderer> gpu_renderer_;
     bool show_tabs_ = false;
     int tab_bar_height_ = 28;
     std::vector<RECT> tab_rects_;
@@ -312,6 +376,27 @@ private:
         status_message_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms);
     }
 
+    // Added missing members for constructor
+    std::shared_ptr<PieceTable> document_;
+    Viewport viewport_;
+    std::unique_ptr<UndoManager> undo_manager_;
+    std::unique_ptr<FindDialog> find_dialog_;
+    std::unique_ptr<SyntaxHighlighter> highlighter_;
+    std::unique_ptr<CodeFoldingManager> folding_manager_;
+    std::unique_ptr<Minimap> minimap_;
+    bool show_file_tree_;
+    int tree_panel_width_;
+    bool show_find_;
+    bool show_replace_;
+    std::string find_text_;
+    std::string replace_text_;
+    bool show_terminal_;
+    int terminal_panel_height_;
+    std::string terminal_input_;
+    int terminal_input_cursor_;
+    bool show_stats_;
+    bool show_line_numbers_;
+    bool relative_line_numbers_;
     void show_commit_dialog() {
         // Simple commit dialog with message box
         // In the future, this could be a custom dialog with file list and checkboxes
@@ -1397,6 +1482,16 @@ private:
         DeleteDC(memDC);
         
         EndPaint(hwnd_, &ps);
+
+        // GPU renderer test (stub)
+        if (gpu_renderer_) {
+            gpu_renderer_->begin_frame();
+            gpu_renderer_->draw_rect(10, 10, 200, 100, 0xFF00FF00); // Green rect
+            gpu_renderer_->draw_text("GPU Test", 30, 50, 0xFFFFFFFF); // White text
+            gpu_renderer_->draw_line(10, 10, 210, 110, 0xFFFF0000); // Red line
+            gpu_renderer_->end_frame();
+            gpu_renderer_->present();
+        }
     }
     
     void SetTextRenderingHint(HDC hdc) {
@@ -2304,7 +2399,7 @@ private:
                 size_t pos = 0, line_index = 0, line_start = 0;
                 for (size_t i = 0; i < document_->get_line_count(); ++i) {
                     std::string line = document_->get_line(i);
-                    size_t line_len = line.length() + 1;
+                    size_t line_len = line.length() + 1; // +1 for newline
                     if (pos + line_len > cursor_pos_) { line_index = i; line_start = pos; break; }
                     pos += line_len;
                 }
@@ -3778,233 +3873,6 @@ private:
         }
     }
     
-    HINSTANCE hInstance_;
-    HWND hwnd_ = nullptr;
-    HFONT hFont_ = nullptr;
-    HIMAGELIST tree_images_ = nullptr;
-    HWND tree_hwnd_ = nullptr;
-    FileTree file_tree_;
-    // Tree drag & drop state
-    bool dragging_tree_ = false;
-    HIMAGELIST tree_drag_img_ = nullptr;
-    HTREEITEM tree_drag_item_ = nullptr;
-    HTREEITEM tree_hover_item_ = nullptr;
-    // Tab bar state
-    bool dragging_tab_ = false;
-    size_t drag_tab_index_ = static_cast<size_t>(-1);
-    size_t hover_tab_index_ = static_cast<size_t>(-1);
-    int tab_scroll_offset_ = 0;
-    
-    std::shared_ptr<PieceTable> document_;
-    Viewport viewport_;
-    std::unique_ptr<UndoManager> undo_manager_;
-    std::unique_ptr<FindDialog> find_dialog_;
-    std::unique_ptr<SyntaxHighlighter> highlighter_;
-    std::unique_ptr<CodeFoldingManager> folding_manager_;
-    std::unique_ptr<Minimap> minimap_;
-    std::unique_ptr<AutocompleteManager> autocomplete_;
-    std::unique_ptr<LSPClient> lsp_client_;
-    std::unique_ptr<GitManager> git_manager_;
-    std::unique_ptr<EmbeddedTerminal> terminal_;
-    std::unique_ptr<Theme> theme_;
-
-    // Autocomplete UI state
-    bool show_autocomplete_ = false;
-    std::vector<std::string> autocomplete_items_;
-    int autocomplete_index_ = 0;
-    size_t autocomplete_anchor_pos_ = 0; // document position where current word starts
-    bool use_lsp_completion_ = false; // prefer LSP over word-based when available
-    
-    // LSP diagnostics
-    std::vector<LSPClient::Diagnostic> current_diagnostics_;
-    
-    // Hover tooltip state
-    HWND hover_tooltip_ = nullptr;
-    std::string hover_text_;
-    POINT last_hover_pos_ = {-1, -1};
-    std::chrono::steady_clock::time_point hover_start_time_;
-    bool hover_tooltip_shown_ = false;
-    
-    bool show_file_tree_;
-    int tree_panel_width_;
-    bool show_find_;
-    bool show_replace_;
-    std::string find_text_;
-    std::string replace_text_;
-    
-    // Terminal panel state
-    bool show_terminal_;
-    int terminal_panel_height_;
-    std::string terminal_input_;
-    int terminal_input_cursor_;
-    
-    size_t cursor_pos_ = 0;
-    bool show_stats_;
-    bool show_line_numbers_;
-    bool relative_line_numbers_;
-    bool replace_edit_find_;
-    
-    double fps_ = 60.0;
-    double last_frame_time_;
-    
-    std::string current_file_;
-    bool is_modified_;
-    
-    bool cursor_visible_;
-    int cursor_blink_time_;
-    
-    bool has_selection_;
-    size_t selection_start_;
-    size_t selection_end_;
-    
-    int char_width_;   // Actual character width from font metrics
-    int char_height_;  // Actual character height from font metrics
-    
-    // Multi-cursor support
-    std::vector<size_t> extra_cursors_;  // Additional cursor positions
-    bool multi_cursor_mode_ = false;
-    
-    // Workspace management
-    WorkspaceManager workspace_manager_;
-    std::string current_workspace_dir_;
-
-    // Split view support
-    enum class SplitMode {
-        None,
-        Horizontal,  // Top and bottom panes
-        Vertical     // Left and right panes
-    };
-
-    struct SplitPane {
-        std::shared_ptr<PieceTable> document;
-        Viewport viewport;
-        size_t cursor_pos = 0;
-        bool has_selection = false;
-        size_t selection_start = 0;
-        size_t selection_end = 0;
-        std::string file_path;
-        bool is_modified = false;
-        std::vector<size_t> extra_cursors;  // For multi-cursor in this pane
-        
-        SplitPane() : document(std::make_shared<PieceTable>()), viewport(35, 100) {
-            viewport.set_document(document);
-        }
-    };
-
-    SplitMode split_mode_ = SplitMode::None;
-    SplitPane pane1_;  // Primary pane (top or left)
-    SplitPane pane2_;  // Secondary pane (bottom or right)
-    int active_pane_ = 0;  // 0 = pane1, 1 = pane2
-    int splitter_pos_ = 0;  // Position of the splitter (pixels from top/left)
-    bool dragging_splitter_ = false;
-    bool sync_scrolling_ = false;  // Synchronized scrolling option
-
-    // Project-wide search
-    struct ProjectSearchResult {
-        std::string file_path;
-        size_t line = 0;     // 0-based
-        size_t column = 0;   // 0-based
-        std::string line_text;
-    };
-
-    bool show_project_search_ = false;
-    std::string project_search_query_;
-    std::string project_replace_query_;
-    std::string project_include_patterns_ = "*.cpp;*.hpp;*.h;*.c;*.txt;*.md";
-    std::string project_exclude_patterns_ = ".git;build;node_modules;*.exe;*.dll;*.obj;*.pdb";
-    int project_search_focus_ = 0; // 0=query,1=replace,2=include,3=exclude,4=results
-    int results_panel_height_ = 260;
-    std::atomic<bool> project_search_in_progress_{false};
-    std::future<void> project_search_future_;
-    std::vector<ProjectSearchResult> project_results_;
-    std::mutex project_results_mutex_;
-    int selected_result_index_ = -1;
-
-    struct ResultRow { // layout helper for click mapping
-        bool is_header = false;
-        std::string file_path;
-        int result_index = -1; // index into project_results_ if not header
-    };
-    std::vector<ResultRow> result_rows_layout_;
-
-    void setup_tree_image_list() {
-        if (!tree_hwnd_) return;
-        if (tree_images_) {
-            ImageList_Destroy(tree_images_);
-            tree_images_ = nullptr;
-        }
-        tree_images_ = ImageList_Create(16, 16, ILC_COLOR32, 6, 6);
-        auto add_swatch = [&](COLORREF color) {
-            HDC hdc = GetDC(hwnd_);
-            HDC mem = CreateCompatibleDC(hdc);
-            HBITMAP bmp = CreateCompatibleBitmap(hdc, 16, 16);
-            HBITMAP old = (HBITMAP)SelectObject(mem, bmp);
-            HBRUSH br = CreateSolidBrush(color);
-            RECT r{0,0,16,16};
-            FillRect(mem, &r, br);
-            DeleteObject(br);
-            SelectObject(mem, old);
-            DeleteDC(mem);
-            ReleaseDC(hwnd_, hdc);
-            int idx = ImageList_Add(tree_images_, bmp, nullptr);
-            DeleteObject(bmp);
-            return idx;
-        };
-        // 0: folder, 1: default, 2: cpp, 3: header, 4: txt/md, 5: json/xml
-        add_swatch(RGB(240, 200, 100)); // folder
-        add_swatch(RGB(160, 160, 170)); // default
-        add_swatch(RGB(80, 160, 255));  // cpp
-        add_swatch(RGB(120, 200, 255)); // header
-        add_swatch(RGB(180, 220, 160)); // text
-        add_swatch(RGB(255, 180, 120)); // json/xml
-        TreeView_SetImageList(tree_hwnd_, tree_images_, TVSIL_NORMAL);
-    }
-
-    void handle_tree_context_command(int cmd, TreeNode* node) {
-        namespace fs = std::filesystem;
-        auto parent_dir = [&](const std::string& p) {
-            fs::path fp(p);
-            if (fs::is_directory(fp)) return fp;
-            return fp.parent_path();
-        };
-
-        if (cmd == 1) { // New File
-            fs::path dir = parent_dir(node->full_path);
-            fs::path base = dir / "New File.txt";
-            fs::path candidate = base;
-            int i = 1;
-            while (fs::exists(candidate)) {
-                candidate = dir / ("New File (" + std::to_string(i++) + ").txt");
-            }
-            std::ofstream(candidate.string()).close();
-            file_tree_.reload();
-        } else if (cmd == 2) { // New Folder
-            fs::path dir = parent_dir(node->full_path);
-            fs::path base = dir / "New Folder";
-            fs::path candidate = base;
-            int i = 1;
-            while (fs::exists(candidate)) {
-                candidate = dir / ("New Folder (" + std::to_string(i++) + ")");
-            }
-            fs::create_directory(candidate);
-            file_tree_.reload();
-        } else if (cmd == 3) { // Delete
-            std::wstring wpath;
-            for (char c : node->full_path) wpath += static_cast<wchar_t>(c);
-            std::wstring msg = L"Delete \"" + wpath + L"\"?";
-            if (MessageBoxW(hwnd_, msg.c_str(), L"Confirm Delete", MB_YESNO | MB_ICONWARNING) == IDYES) {
-                try {
-                    if (std::filesystem::is_directory(node->full_path)) {
-                        std::filesystem::remove_all(node->full_path);
-                    } else {
-                        std::filesystem::remove(node->full_path);
-                    }
-                } catch (...) {}
-                file_tree_.reload();
-            }
-        }
-    }
-
     void open_file_from_path(const std::string& path) {
         std::ifstream file(path, std::ios::binary);
         if (!file) return;
@@ -4096,7 +3964,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     FILE* fp;
     freopen_s(&fp, "CONOUT$", "w", stdout);
     freopen_s(&fp, "CONOUT$", "w", stderr);
-    
+
+    auto startup_begin = std::chrono::high_resolution_clock::now();
+
     std::cout << "=================================================\n";
     std::cout << "  HIGH-PERFORMANCE TEXT EDITOR - Win32 GUI\n";
     std::cout << "=================================================\n\n";
@@ -4108,14 +3978,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     std::cout << "Opening editor window...\n\n";
     std::cout << "Press Ctrl+L in the editor to load 50k line demo!\n";
     std::cout << "Watch how it stays at 60fps even with huge files.\n\n";
-    
+
     Win32TextEditor editor(hInstance);
-    
+
+    auto startup_mid = std::chrono::high_resolution_clock::now();
+
     if (!editor.create_window()) {
         MessageBoxW(nullptr, L"Failed to create window", L"Error", MB_OK | MB_ICONERROR);
         return 1;
     }
-    
+
+    auto startup_end = std::chrono::high_resolution_clock::now();
+    double ms_init = std::chrono::duration_cast<std::chrono::microseconds>(startup_mid - startup_begin).count() / 1000.0;
+    double ms_window = std::chrono::duration_cast<std::chrono::microseconds>(startup_end - startup_mid).count() / 1000.0;
+    double ms_total = std::chrono::duration_cast<std::chrono::microseconds>(startup_end - startup_begin).count() / 1000.0;
+
+    std::ofstream log("startup_log.txt", std::ios::app);
+    log << "Editor startup time: " << ms_total << " ms (init: " << ms_init << " ms, window: " << ms_window << " ms)\n";
+    log.close();
+
     return editor.run();
-}
+};
 

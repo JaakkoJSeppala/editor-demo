@@ -118,29 +118,22 @@ void PieceTable::remove(size_t position, size_t length) {
 std::string PieceTable::get_text(size_t start, size_t length) const {
     std::string result;
     result.reserve(length);
-    
     size_t current_pos = 0;
     size_t remaining = length;
-    
     for (const auto& piece : pieces_) {
         if (remaining == 0) break;
-        
         size_t piece_end = current_pos + piece.length;
-        
         if (piece_end > start && current_pos < start + length) {
             size_t offset_in_piece = (start > current_pos) ? (start - current_pos) : 0;
             size_t copy_length = std::min(piece.length - offset_in_piece, remaining);
-            
-            const std::string& source = (piece.source == Piece::Source::ORIGINAL) 
+            const std::string& source = (piece.source == Piece::Source::ORIGINAL)
                                        ? original_buffer_ : add_buffer_;
-            
-            result += source.substr(piece.offset + offset_in_piece, copy_length);
+            // Käytetään appendia substrin sijaan
+            result.append(source, piece.offset + offset_in_piece, copy_length);
             remaining -= copy_length;
         }
-        
         current_pos = piece_end;
     }
-    
     return result;
 }
 
