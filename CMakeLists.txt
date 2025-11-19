@@ -60,6 +60,19 @@ if(WIN32)
         target_compile_options(wasm3 PRIVATE -w)
     endif()
 
+    # Platform abstraction test
+    add_executable(platform_test
+        src/platform_test.cpp
+        src/platform_types.cpp
+        src/platform_window_win32.cpp
+    )
+    target_include_directories(platform_test PRIVATE include)
+    target_link_libraries(platform_test PRIVATE gdi32 user32)
+    if(MSVC)
+        # Avoid std::atomic conflicts with Windows SDK
+        target_compile_definitions(platform_test PRIVATE _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+    endif()
+
     add_executable(editor_gui WIN32
         src/gui_main.cpp
         src/piece_table.cpp
