@@ -12,6 +12,7 @@
 #include "autocomplete.h"
 #include "lsp_client.h"
 #include "git_integration.h"
+#include "terminal.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -68,6 +69,10 @@ public:
         , show_replace_(false)
         , find_text_("")
         , replace_text_("")
+        , show_terminal_(false)
+        , terminal_panel_height_(250)
+        , terminal_input_("")
+        , terminal_input_cursor_(0)
         , show_stats_(true)
         , show_line_numbers_(true)
         , relative_line_numbers_(false)
@@ -95,6 +100,7 @@ public:
         autocomplete_ = std::make_unique<AutocompleteManager>();
         lsp_client_ = std::make_unique<LSPClient>();
         git_manager_ = std::make_unique<GitManager>();
+        terminal_ = std::make_unique<EmbeddedTerminal>();
         
         // Try to start clangd if available (for C/C++ files)
         // This is optional - editor works fine without it
@@ -1369,6 +1375,11 @@ private:
             render_minimap(memDC, client_rect);
         }
         
+        // Render terminal panel
+        if (show_terminal_) {
+            render_terminal(memDC, client_rect);
+        }
+        
         // Render stats
         if (show_stats_) {
             render_stats(memDC, client_rect);
@@ -1392,6 +1403,10 @@ private:
 
     int get_content_top() const {
         return 10 + (show_tabs_ ? tab_bar_height_ : 0);
+    }
+
+    int get_content_bottom(const RECT& client_rect) const {
+        return client_rect.bottom - (show_terminal_ ? terminal_panel_height_ : 0);
     }
 
     int get_content_left() const {
@@ -1495,6 +1510,65 @@ private:
         }
         update_title();
         InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    
+    void render_terminal(HDC hdc, const RECT& client_rect) {
+        // Get fresh terminal output
+        terminal_->get_output();
+        
+        // Calculate terminal panel position (bottom of window)
+        int term_top = client_rect.bottom - terminal_panel_height_;
+        RECT term_rect = { 0, term_top, client_rect.right, client_rect.bottom };
+        
+        // Background
+        HBRUSH termBgBrush = CreateSolidBrush(RGB(20, 20, 25));
+        FillRect(hdc, &term_rect, termBgBrush);
+        DeleteObject(termBgBrush);
+        
+        // Border
+        HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(70, 70, 80));
+        HPEN oldPen = (HPEN)SelectObject(hdc, borderPen);
+        MoveToEx(hdc, term_rect.left, term_rect.top, nullptr);
+        LineTo(hdc, term_rect.right, term_rect.top);
+        SelectObject(hdc, oldPen);
+        DeleteObject(borderPen);
+        
+        // Title bar
+        SetTextColor(hdc, RGB(180, 180, 200));
+        TextOutA(hdc, 10, term_rect.top + 5, "TERMINAL", 8);
+        
+        // Render terminal buffer
+        const auto& buffer = terminal_->get_buffer();
+        int y = term_rect.top + 30;
+        int scroll_offset = terminal_->get_scroll_offset();
+        size_t start_line = (scroll_offset > 0) ? scroll_offset : 0;
+        size_t visible_lines = (terminal_panel_height_ - 30) / char_height_;
+        
+        SetTextColor(hdc, RGB(220, 220, 220));
+        for (size_t i = start_line; i < buffer.size() && i < start_line + visible_lines; ++i) {
+            const std::string& line = buffer[i];
+            if (!line.empty()) {
+                TextOutA(hdc, 10, y, line.c_str(), static_cast<int>(line.size()));
+            }
+            y += char_height_;
+        }
+        
+        // Input line
+        int input_y = client_rect.bottom - char_height_ - 5;
+        SetTextColor(hdc, RGB(100, 255, 100));
+        std::string prompt = "> " + terminal_input_;
+        TextOutA(hdc, 10, input_y, prompt.c_str(), static_cast<int>(prompt.size()));
+        
+        // Cursor in terminal input
+        if (cursor_visible_) {
+            int cursor_x = 10 + (2 + terminal_input_cursor_) * char_width_;
+            HPEN cursorPen = CreatePen(PS_SOLID, 2, RGB(100, 255, 100));
+            oldPen = (HPEN)SelectObject(hdc, cursorPen);
+            MoveToEx(hdc, cursor_x, input_y, nullptr);
+            LineTo(hdc, cursor_x, input_y + char_height_);
+            SelectObject(hdc, oldPen);
+            DeleteObject(cursorPen);
+        }
     }
     
     void render_stats(HDC hdc, const RECT& client_rect) {
@@ -2746,6 +2820,14 @@ private:
                 show_branch_menu();
             }
         }
+        else if (key == VK_OEM_3 && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            // Ctrl+` - Toggle terminal
+            show_terminal_ = !show_terminal_;
+            if (show_terminal_ && !terminal_->is_running()) {
+                terminal_->start_shell("powershell.exe");
+            }
+            InvalidateRect(hwnd_, nullptr, TRUE);
+        }
         else if (key == L'H' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+H - Toggle replace mode
             show_replace_ = !show_replace_;
@@ -3703,6 +3785,7 @@ private:
     std::unique_ptr<AutocompleteManager> autocomplete_;
     std::unique_ptr<LSPClient> lsp_client_;
     std::unique_ptr<GitManager> git_manager_;
+    std::unique_ptr<EmbeddedTerminal> terminal_;
 
     // Autocomplete UI state
     bool show_autocomplete_ = false;
@@ -3727,6 +3810,12 @@ private:
     bool show_replace_;
     std::string find_text_;
     std::string replace_text_;
+    
+    // Terminal panel state
+    bool show_terminal_;
+    int terminal_panel_height_;
+    std::string terminal_input_;
+    int terminal_input_cursor_;
     
     size_t cursor_pos_ = 0;
     bool show_stats_;
