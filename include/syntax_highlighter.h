@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <cctype>
 #include <windows.h>
+#include "treesitter_bridge.h"
 
 /**
  * Token represents a syntax element with its color
@@ -56,6 +57,10 @@ public:
     void set_language(Language lang) {
         language_ = lang;
         rebuild_keywords();
+        // Initialize Tree-sitter bridge for this language (optional)
+        ts_lang_id_ = language_to_id(language_);
+        if (!ts_bridge_) ts_bridge_ = std::make_unique<TreeSitterBridge>();
+        ts_bridge_->initialize(ts_lang_id_);
     }
 
     void set_language_by_filename(const std::string& filename) {
@@ -83,11 +88,21 @@ public:
         } else {
             set_language(Language::Cpp); // fallback reasonable default
         }
+        // Update TS language id after filename detection
+        ts_lang_id_ = language_to_id(language_);
     }
     
     // Incremental tokenization with line state
     std::vector<Token> tokenize_line(const std::string& line, const LineState& in_state, LineState& out_state) {
         std::vector<Token> tokens; out_state = in_state; size_t i = 0; const size_t n = line.length();
+
+        // Try Tree-sitter tokens if available and document text was set (via set_document_lines)
+        if (ts_bridge_ && ts_bridge_->is_available() && current_line_index_ != SIZE_MAX) {
+            std::vector<Token> ts_tokens;
+            if (ts_bridge_->get_line_tokens(current_line_index_, ts_tokens)) {
+                return ts_tokens; // use TS tokens as authoritative
+            }
+        }
 
         auto emit_string = [&](size_t start_idx, char delim){
             size_t i2 = start_idx + 1;
@@ -165,10 +180,20 @@ public:
     std::vector<Token> tokenize_line(const std::string& line) {
         LineState s_in{}, s_out{}; return tokenize_line(line, s_in, s_out);
     }
+
+    // Optional: provide full document so TS can parse
+    void set_document_lines(const std::vector<std::string>& lines) {
+        if (ts_bridge_) ts_bridge_->set_document_text(lines);
+    }
+    // Optional: tell the highlighter which line number is being tokenized (for TS mapping)
+    void set_current_line_index(size_t line_index) { current_line_index_ = line_index; }
     
 private:
     Language language_ = Language::Cpp;
     std::unordered_set<std::string> keywords_;
+    std::unique_ptr<TreeSitterBridge> ts_bridge_;
+    std::string ts_lang_id_;
+    size_t current_line_index_ = SIZE_MAX;
 
     bool is_line_comment_start(const std::string& line, size_t i) const {
         if (language_ == Language::Python || language_ == Language::YAML) return line[i] == '#';
@@ -212,6 +237,21 @@ private:
             case Language::YAML: keywords_ = yaml_keywords(); break;
             case Language::Markdown: keywords_.clear(); break;
             default: break;
+        }
+    }
+
+    static std::string language_to_id(Language lang) {
+        switch (lang) {
+            case Language::Cpp: return "cpp";
+            case Language::Python: return "python";
+            case Language::JavaScript: return "javascript";
+            case Language::TypeScript: return "typescript";
+            case Language::Rust: return "rust";
+            case Language::Go: return "go";
+            case Language::JSON: return "json";
+            case Language::YAML: return "yaml";
+            case Language::Markdown: return "markdown";
+            default: return "";
         }
     }
 

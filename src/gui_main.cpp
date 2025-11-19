@@ -849,6 +849,14 @@ private:
             highlighter_->tokenize_line(document_->get_line(li), hl_state_pre, out);
             hl_state_pre = out;
         }
+        // Feed document to highlighter for TS (if enabled)
+        if (highlighter_) {
+            std::vector<std::string> all;
+            all.reserve(document_->get_line_count());
+            for (size_t i = 0; i < document_->get_line_count(); ++i) all.push_back(document_->get_line(i));
+            highlighter_->set_document_lines(all);
+        }
+
         for (const auto& line : visible_lines) {
             // Skip folded lines
             if (folding_manager_ && !folding_manager_->is_line_visible(line_num)) {
@@ -940,6 +948,7 @@ private:
             }
             
             // Tokenize line for syntax highlighting (incremental state)
+            if (highlighter_) highlighter_->set_current_line_index(line_num);
             SyntaxHighlighter::LineState hl_state_out{};
             auto tokens = highlighter_->tokenize_line(line, hl_state_pre, hl_state_out);
             hl_state_pre = hl_state_out;
@@ -1320,16 +1329,20 @@ private:
         
         // Get all lines
         std::vector<std::string> lines;
+        lines.reserve(document_->get_line_count());
         for (size_t i = 0; i < document_->get_line_count(); ++i) {
             lines.push_back(document_->get_line(i));
         }
+        if (highlighter_) highlighter_->set_document_lines(lines);
         
         // Generate syntax colors for minimap (simplified)
         std::vector<COLORREF> colors;
-        for (const auto& line : lines) {
+        for (size_t li = 0; li < lines.size(); ++li) {
+            const auto& line = lines[li];
             // Determine color based on content
             COLORREF line_color = RGB(180, 180, 180); // Default
             
+            if (highlighter_) highlighter_->set_current_line_index(li);
             auto tokens = highlighter_->tokenize_line(line);
             if (!tokens.empty()) {
                 // Use color of first significant token
@@ -1604,6 +1617,7 @@ private:
             }
             
             // Tokenize and render (incremental)
+            if (highlighter_) highlighter_->set_current_line_index(line_num);
             SyntaxHighlighter::LineState st_out{};
             auto tokens = highlighter_->tokenize_line(line, pane_state, st_out);
             pane_state = st_out;

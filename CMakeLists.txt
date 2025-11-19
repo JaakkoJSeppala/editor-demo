@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(HighPerformanceEditor VERSION 1.0)
+option(ENABLE_TREESITTER "Enable Tree-sitter parsing (requires vendored libs)" OFF)
+
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -35,6 +37,7 @@ if(WIN32)
         src/indexer.cpp
         src/undo_manager.cpp
         src/find_dialog.cpp
+        src/treesitter_bridge.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include)
@@ -46,6 +49,16 @@ if(WIN32)
         target_compile_options(editor_gui PRIVATE /W4 /O2)
     else()
         target_compile_options(editor_gui PRIVATE -Wall -Wextra -O3) 
+    endif()
+
+    if(ENABLE_TREESITTER)
+        target_compile_definitions(editor_gui PRIVATE ENABLE_TREESITTER=1)
+        # NOTE: Link your vendored Tree-sitter libs here when available, e.g.:
+        # target_include_directories(editor_gui PRIVATE external/treesitter/include)
+        # target_link_libraries(editor_gui PRIVATE tree-sitter tree-sitter-c tree-sitter-cpp ...)
+        message(STATUS "Tree-sitter enabled: remember to add grammars and link libs")
+    else()
+        message(STATUS "Tree-sitter disabled (ENABLE_TREESITTER=OFF)")
     endif()
 
     message(STATUS "Building Win32 GUI editor")
