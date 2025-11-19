@@ -200,11 +200,10 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - [x] Python, JavaScript, TypeScript, Rust, Go
 - [x] JSON, YAML, Markdown
 - [x] Incremental parsing (line state)
-- [x] TreeSitter integration (C/C++ parsers)
+- [x] TreeSitter integration (all 8 languages: C, C++, Python, JS, TS, JSON, YAML, MD)
 - [x] Runtime toggle (Ctrl+Shift+T)
 - [x] Fallback to legacy tokenizer
-- [ ] TextMate grammar support
-- [ ] Additional TreeSitter grammars (Python, JS, TS, etc.)
+- [ ] TextMate grammar support (optional enhancement)
 - **Priority:** 🟡 Important
 - **Effort:** 3 weeks
 
