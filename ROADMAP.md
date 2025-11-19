@@ -245,16 +245,18 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Priority:** 🔴 Critical
 - **Effort:** 2 weeks → Completed
 
-### Code Navigation ✅ PARTIAL
+### Code Navigation ✅ COMPLETE
 - [x] Go to definition (F12)
+- [x] Find all references (Shift+F12)
 - [x] Cross-file navigation
 - [x] Automatic file loading and cursor positioning
+- [x] Reference count display in status message
 - [ ] Peek definition (Alt+F12) - Future
-- [ ] Find all references (Shift+F12) - API ready, UI pending
 - [ ] Go to implementation - Future
 - [ ] Symbol search (Ctrl+T) - Future
+- [ ] Full references panel UI - Future
 - **Priority:** 🔴 Critical
-- **Effort:** 2 weeks → Core features complete
+- **Effort:** 2 weeks → Completed
 
 ### Diagnostics ✅ COMPLETE
 - [x] Error/warning display with red squiggles
@@ -266,7 +268,16 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - [ ] Quick fixes (Ctrl+.) - Future
 - [ ] Auto-fix on save - Future
 - **Priority:** 🔴 Critical
-- **Effort:** 2 weeks → Core features complete
+- **Effort:** 2 weeks → Completed
+
+### Hover & Documentation ✅ COMPLETE
+- [x] Hover tooltips with Win32 tooltip window
+- [x] Type information display
+- [x] Documentation on hover (500ms delay)
+- [x] LSP hover API integration
+- [ ] Markdown rendering in tooltips - Future
+- **Priority:** 🟡 Important
+- **Effort:** 1 week → Completed
 
 ### Code Actions ⏳ FUTURE
 - [ ] Refactoring suggestions
@@ -277,7 +288,7 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Priority:** 🟡 Important
 - **Effort:** 2 weeks
 
-**Deliverable:** ✅ DELIVERED - IDE-level language intelligence with LSP. Smart code completion, live error diagnostics, and go-to-definition navigation working with clangd for C/C++.
+**Deliverable:** ✅ DELIVERED - IDE-level language intelligence with comprehensive LSP integration. Smart code completion, live error diagnostics, go-to-definition (F12), find references (Shift+F12), and hover tooltips all working with clangd for C/C++.
 
 ---
 
