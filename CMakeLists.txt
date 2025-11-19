@@ -28,8 +28,38 @@ add_executable(editor_tests
 
 target_include_directories(editor_tests PRIVATE include)
 
+# Plugin system test
+if(WIN32)
+    add_executable(plugin_test
+        src/plugin_test.cpp
+        src/plugin_manager.cpp
+        src/wasm_runtime.cpp
+    )
+
+    target_include_directories(plugin_test PRIVATE include)
+    target_link_libraries(plugin_test PRIVATE wasm3)
+
+    if(MSVC)
+        target_compile_options(plugin_test PRIVATE /W4)
+    else()
+        target_compile_options(plugin_test PRIVATE -Wall -Wextra)
+    endif()
+endif()
+
 # GUI editor (Windows native)
 if(WIN32)
+    # wasm3 library
+    set(WASM3_DIR "${CMAKE_SOURCE_DIR}/third_party/wasm3")
+    file(GLOB WASM3_SOURCES "${WASM3_DIR}/source/*.c")
+    add_library(wasm3 STATIC ${WASM3_SOURCES})
+    target_include_directories(wasm3 PUBLIC "${WASM3_DIR}/source")
+    # Disable warnings for third-party code
+    if(MSVC)
+        target_compile_options(wasm3 PRIVATE /W0)
+    else()
+        target_compile_options(wasm3 PRIVATE -w)
+    endif()
+
     add_executable(editor_gui WIN32
         src/gui_main.cpp
         src/piece_table.cpp
@@ -42,12 +72,14 @@ if(WIN32)
         src/git_integration.cpp
         src/terminal.cpp
         src/theme.cpp
+        src/wasm_runtime.cpp
+        src/plugin_manager.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)
 
-    # Link common controls for TreeView
-    target_link_libraries(editor_gui PRIVATE comctl32)
+    # Link common controls for TreeView and wasm3
+    target_link_libraries(editor_gui PRIVATE comctl32 wasm3)
 
     if(MSVC)
         target_compile_options(editor_gui PRIVATE /W4 /O2)
