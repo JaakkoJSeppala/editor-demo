@@ -2,10 +2,9 @@
 #include <algorithm>
 #include <sstream>
 
-PieceTable::PieceTable() : line_cache_valid_(false) {
-}
+PieceTable::PieceTable() : line_cache_valid_(false) {}
 
-PieceTable::PieceTable(const std::string& initial_text) 
+PieceTable::PieceTable(const std::string& initial_text)
     : original_buffer_(initial_text), line_cache_valid_(false) {
     if (!initial_text.empty()) {
         pieces_.emplace_back(Piece::Source::ORIGINAL, 0, initial_text.length());
@@ -13,8 +12,9 @@ PieceTable::PieceTable(const std::string& initial_text)
 }
 
 void PieceTable::insert(size_t position, const std::string& text) {
+    undo_stack_.push_back({pieces_, add_buffer_});
+    redo_stack_.clear();
     if (text.empty()) return;
-    
     line_cache_valid_ = false;
     
     // Find the piece containing the position
@@ -74,17 +74,16 @@ void PieceTable::insert(size_t position, const std::string& text) {
 }
 
 void PieceTable::remove(size_t position, size_t length) {
+    undo_stack_.push_back({pieces_, add_buffer_});
+    redo_stack_.clear();
     if (length == 0) return;
     
     line_cache_valid_ = false;
-    
     size_t end_position = position + length;
     size_t current_pos = 0;
     std::vector<Piece> new_pieces;
-    
     for (const auto& piece : pieces_) {
         size_t piece_end = current_pos + piece.length;
-        
         // Piece is completely before deletion range
         if (piece_end <= position) {
             new_pieces.push_back(piece);
@@ -100,7 +99,6 @@ void PieceTable::remove(size_t position, size_t length) {
                 size_t keep_length = position - current_pos;
                 new_pieces.emplace_back(piece.source, piece.offset, keep_length);
             }
-            
             // Keep part after deletion
             if (piece_end > end_position) {
                 size_t skip_length = end_position - current_pos;
@@ -108,10 +106,8 @@ void PieceTable::remove(size_t position, size_t length) {
                 new_pieces.emplace_back(piece.source, piece.offset + skip_length, keep_length);
             }
         }
-        
         current_pos = piece_end;
     }
-    
     pieces_ = std::move(new_pieces);
 }
 
@@ -206,4 +202,26 @@ std::vector<std::string> PieceTable::get_lines_range(size_t start_line, size_t c
     }
     
     return lines;
+}
+
+void PieceTable::undo() {
+    if (!undo_stack_.empty()) {
+        redo_stack_.push_back({pieces_, add_buffer_});
+        PTState state = undo_stack_.back();
+        undo_stack_.pop_back();
+        pieces_ = state.pieces;
+        add_buffer_ = state.add_buffer;
+        line_cache_valid_ = false;
+    }
+}
+
+void PieceTable::redo() {
+    if (!redo_stack_.empty()) {
+        undo_stack_.push_back({pieces_, add_buffer_});
+        PTState state = redo_stack_.back();
+        redo_stack_.pop_back();
+        pieces_ = state.pieces;
+        add_buffer_ = state.add_buffer;
+        line_cache_valid_ = false;
+    }
 }
