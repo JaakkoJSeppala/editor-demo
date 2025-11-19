@@ -90,6 +90,26 @@ int main() {
     std::cout << "[PASS] fibonacci(15) = " << result << std::endl;
     assert(result == 610);
 
+    // Test virhetilanne: puuttuva funktio
+    std::cout << "\nTesting missing_function()..." << std::endl;
+    result = 0;
+    if (plugin->call_function("missing_function", {}, &result)) {
+        std::cerr << "[FAIL] missing_function should not exist!" << std::endl;
+        return 1;
+    } else {
+        std::cout << "[PASS] missing_function() correctly failed: " << plugin->get_error() << std::endl;
+    }
+
+    // Test virhetilanne: väärä argumenttimäärä
+    std::cout << "\nTesting add_numbers(1)..." << std::endl;
+    result = 0;
+    if (plugin->call_function("add_numbers", {1}, &result)) {
+        std::cerr << "[FAIL] add_numbers(1) should fail due to wrong arg count!" << std::endl;
+        return 1;
+    } else {
+        std::cout << "[PASS] add_numbers(1) correctly failed: " << plugin->get_error() << std::endl;
+    }
+
     // Deactivate plugin
     std::cout << "\nDeactivating plugin..." << std::endl;
     if (!manager.deactivate_plugin("hello")) {
