@@ -89,6 +89,8 @@ if(WIN32)
         src/theme.cpp
         src/wasm_runtime.cpp
         src/plugin_manager.cpp
+        src/platform_file.cpp
+        src/platform_process.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)
@@ -232,6 +234,8 @@ elseif(UNIX AND NOT APPLE)
         src/theme.cpp
         src/wasm_runtime.cpp
         src/plugin_manager.cpp
+        src/platform_file.cpp
+        src/platform_process.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json ${GTK4_INCLUDE_DIRS})
@@ -317,6 +321,8 @@ elseif(APPLE)
         src/theme.cpp
         src/wasm_runtime.cpp
         src/plugin_manager.cpp
+        src/platform_file.cpp
+        src/platform_process.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)
