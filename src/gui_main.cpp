@@ -10,6 +10,7 @@
 #include "code_folding.h"
 #include "minimap.h"
 #include "autocomplete.h"
+#include "lsp_client.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -91,6 +92,22 @@ public:
         , sync_scrolling_(false)
     {
         autocomplete_ = std::make_unique<AutocompleteManager>();
+        lsp_client_ = std::make_unique<LSPClient>();
+        
+        // Try to start clangd if available (for C/C++ files)
+        // This is optional - editor works fine without it
+        char cwd[MAX_PATH];
+        GetCurrentDirectoryA(MAX_PATH, cwd);
+        lsp_client_->start_server("clangd", std::string(cwd));
+        lsp_client_->initialize(std::string(cwd));
+        
+        // Set up diagnostics callback
+        lsp_client_->set_diagnostics_callback([this](const std::string& uri, const std::vector<LSPClient::Diagnostic>& diags) {
+            (void)uri;
+            current_diagnostics_ = diags;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        });
+        
         // Initialize with welcome text
         std::string welcome = 
             "HIGH-PERFORMANCE TEXT EDITOR - Win32 Native GUI\n"
@@ -1047,6 +1064,42 @@ private:
             line_num++;
         }
 
+        // Render diagnostics (error squiggles)
+        if (!current_diagnostics_.empty()) {
+            RECT client_rect;
+            GetClientRect(hwnd_, &client_rect);
+            int content_height = client_rect.bottom - get_content_top();
+            int visible_lines = content_height / char_height_;
+            for (const auto& diag : current_diagnostics_) {
+                size_t line_idx = diag.range.start.line;
+                if (line_idx >= viewport_.get_top_line() && line_idx < viewport_.get_top_line() + visible_lines) {
+                    std::string line = document_->get_line(line_idx);
+                    int text_x_offset = base_left + (show_line_numbers_ ? 70 : 0);
+                    int diag_y = get_content_top() + (int)(line_idx - viewport_.get_top_line()) * char_height_ + char_height_ - 2;
+                    
+                    size_t start_col = diag.range.start.character;
+                    size_t end_col = (diag.range.end.line == line_idx) ? diag.range.end.character : line.length();
+                    
+                    // Draw red squiggle
+                    HPEN squiggle_pen = CreatePen(PS_SOLID, 1, RGB(255, 0, 0));
+                    HPEN old_pen = (HPEN)SelectObject(memDC, squiggle_pen);
+                    
+                    int x_start = text_x_offset + start_col * char_width_;
+                    int x_end = text_x_offset + end_col * char_width_;
+                    
+                    // Draw wavy underline
+                    for (int x = x_start; x < x_end; x += 4) {
+                        MoveToEx(memDC, x, diag_y, nullptr);
+                        LineTo(memDC, x + 2, diag_y + 2);
+                        LineTo(memDC, x + 4, diag_y);
+                    }
+                    
+                    SelectObject(memDC, old_pen);
+                    DeleteObject(squiggle_pen);
+                }
+            }
+        }
+
         // Render autocomplete popup (single-view only)
         if (show_autocomplete_ && !autocomplete_items_.empty()) {
             size_t caret_line = get_cursor_line();
@@ -1887,6 +1940,14 @@ private:
             is_modified_ = true;
             mark_active_tab_modified();
             
+            // Notify LSP of document change
+            if (lsp_client_ && !current_file_.empty()) {
+                lsp_client_->did_change(
+                    "file:///" + current_file_,
+                    document_->get_text(0, document_->get_total_length())
+                );
+            }
+            
             // Reset cursor blink
             cursor_visible_ = true;
             cursor_blink_time_ = 0;
@@ -1913,15 +1974,39 @@ private:
                 while (start > 0 && is_ident_char(line[start-1])) start--;
                 if (start < line.size() && is_ident_start(line[start])) {
                     std::string prefix = line.substr(start, (std::min)(col, line.size()) - start);
-                    if (prefix.size() >= 2 && autocomplete_) {
-                        auto items = autocomplete_->suggest(prefix);
-                        // Remove exact-match duplicate
-                        items.erase(std::remove(items.begin(), items.end(), prefix), items.end());
-                        if (!items.empty()) {
-                            autocomplete_items_ = std::move(items);
-                            autocomplete_index_ = 0;
-                            autocomplete_anchor_pos_ = line_start + start;
-                            show_autocomplete_ = true;
+                    if (prefix.size() >= 2) {
+                        // Try LSP completion first
+                        if (lsp_client_ && use_lsp_completion_ && !current_file_.empty()) {
+                            // Request completion from LSP server
+                            lsp_client_->request_completion(
+                                "file:///" + current_file_,
+                                (int)line_index,
+                                (int)col,
+                                [this, line_start, start](const std::vector<LSPClient::CompletionItem>& completions) {
+                                    if (!completions.empty()) {
+                                        autocomplete_items_.clear();
+                                        for (const auto& item : completions) {
+                                            autocomplete_items_.push_back(item.label);
+                                        }
+                                        autocomplete_index_ = 0;
+                                        autocomplete_anchor_pos_ = line_start + start;
+                                        show_autocomplete_ = true;
+                                    }
+                                }
+                            );
+                        } else if (autocomplete_) {
+                            // Fallback to word-based completion
+                            auto items = autocomplete_->suggest(prefix);
+                            // Remove exact-match duplicate
+                            items.erase(std::remove(items.begin(), items.end(), prefix), items.end());
+                            if (!items.empty()) {
+                                autocomplete_items_ = std::move(items);
+                                autocomplete_index_ = 0;
+                                autocomplete_anchor_pos_ = line_start + start;
+                                show_autocomplete_ = true;
+                            } else {
+                                show_autocomplete_ = false;
+                            }
                         } else {
                             show_autocomplete_ = false;
                         }
@@ -2589,6 +2674,51 @@ private:
             // Toggle relative line numbers
             relative_line_numbers_ = !relative_line_numbers_;
         }
+        else if (key == VK_F12) {
+            // F12 - Go to definition
+            if (lsp_client_ && !current_file_.empty()) {
+                size_t line_idx = get_cursor_line();
+                size_t col_idx = get_cursor_column();
+                
+                lsp_client_->request_definition(
+                    "file:///" + current_file_,
+                    (int)line_idx,
+                    (int)col_idx,
+                    [this](const std::vector<LSPClient::Location>& locations) {
+                        if (!locations.empty()) {
+                            const auto& loc = locations[0];
+                            // Extract file path from URI (remove file:///)
+                            std::string path = loc.uri;
+                            if (path.find("file:///") == 0) {
+                                path = path.substr(8);
+                            }
+                            
+                            // Load file content
+                            current_file_ = path;
+                            std::ifstream file(path, std::ios::binary);
+                            if (file) {
+                                std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                                document_ = std::make_unique<PieceTable>(content);
+                                
+                                // Calculate cursor position from line/character
+                                size_t target_pos = 0;
+                                for (int i = 0; i < loc.range.start.line && (size_t)i < document_->get_line_count(); ++i) {
+                                    target_pos += document_->get_line(i).length() + 1;
+                                }
+                                target_pos += loc.range.start.character;
+                                cursor_pos_ = target_pos;
+                                
+                                // Center view on cursor
+                                size_t line = get_cursor_line();
+                                viewport_.scroll_to_line(line > 10 ? line - 10 : 0);
+                                
+                                InvalidateRect(hwnd_, nullptr, FALSE);
+                            }
+                        }
+                    }
+                );
+            }
+        }
         else if (key == VK_TAB && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+Tab / Ctrl+Shift+Tab - Switch tabs
             if (tab_manager_) {
@@ -2738,6 +2868,13 @@ private:
                 highlighter_->set_language_by_filename(current_file_);
             }
             
+            // Notify LSP server about opened document
+            if (lsp_client_ && lsp_client_->is_running()) {
+                std::string uri = "file:///" + current_file_;
+                std::string lang_id = "cpp"; // Detect from extension in real impl
+                lsp_client_->did_open(uri, lang_id, content);
+            }
+            
             // Add to recent files
             workspace_manager_.add_recent_file(narrow_filename);
             
@@ -2800,6 +2937,11 @@ private:
         
         file.write(content.c_str(), content.length());
         file.close();
+        
+        // Notify LSP of saved document
+        if (lsp_client_ && !current_file_.empty()) {
+            lsp_client_->did_save("file:///" + current_file_);
+        }
         
         auto end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -3240,12 +3382,17 @@ private:
     std::unique_ptr<CodeFoldingManager> folding_manager_;
     std::unique_ptr<Minimap> minimap_;
     std::unique_ptr<AutocompleteManager> autocomplete_;
+    std::unique_ptr<LSPClient> lsp_client_;
 
     // Autocomplete UI state
     bool show_autocomplete_ = false;
     std::vector<std::string> autocomplete_items_;
     int autocomplete_index_ = 0;
     size_t autocomplete_anchor_pos_ = 0; // document position where current word starts
+    bool use_lsp_completion_ = false; // prefer LSP over word-based when available
+    
+    // LSP diagnostics
+    std::vector<LSPClient::Diagnostic> current_diagnostics_;
     
     bool show_file_tree_;
     int tree_panel_width_;

@@ -38,9 +38,10 @@ if(WIN32)
         src/undo_manager.cpp
         src/find_dialog.cpp
         src/treesitter_bridge.cpp
+        src/lsp_client.cpp
     )
 
-    target_include_directories(editor_gui PRIVATE include)
+    target_include_directories(editor_gui PRIVATE include external/json)
 
     # Link common controls for TreeView
     target_link_libraries(editor_gui PRIVATE comctl32)
