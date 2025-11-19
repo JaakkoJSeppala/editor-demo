@@ -355,13 +355,17 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 **Target: Complete the developer experience**
 
 ### Integrated Terminal
-- [ ] Embedded terminal panel
-- [ ] Multiple terminal tabs
-- [ ] Shell integration (bash, zsh, PowerShell)
-- [ ] Split terminal
-- [ ] Link detection (Ctrl+Click)
+- [x] Embedded terminal panel
+- [x] PowerShell integration with CreateProcess
+- [x] Async I/O with background thread
+- [x] Scrollback buffer (10k lines)
+- [x] Toggle with Ctrl+`
+- [ ] Multiple terminal tabs (future enhancement)
+- [ ] Shell integration (bash, zsh) for cross-platform (future)
+- [ ] Split terminal (future)
+- [ ] Link detection (Ctrl+Click) (future)
 - **Priority:** 🟡 Important
-- **Effort:** 3 weeks
+- **Effort:** 3 weeks → Core terminal complete
 
 ### Theme System
 - [ ] Theme definition format (JSON)

@@ -41,6 +41,7 @@ if(WIN32)
         src/lsp_client.cpp
         src/git_integration.cpp
         src/terminal.cpp
+        src/theme.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)

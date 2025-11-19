@@ -67,6 +67,14 @@ Modern text editors struggle with large projects:
 - ✅ **Commit Dialog** - Ctrl+Shift+G to commit staged files
 - ✅ **Branch Management** - Ctrl+Shift+B to view branches
 
+### Terminal Integration (Phase 6)
+- ✅ **Embedded Terminal** - integrated terminal panel at bottom
+- ✅ **PowerShell Support** - native Windows PowerShell integration
+- ✅ **Process Management** - background process spawning with pipe I/O
+- ✅ **Async Output** - non-blocking terminal output with background thread
+- ✅ **Scrollback Buffer** - 10k line history with scrolling
+- ✅ **Toggle Panel** - Ctrl+` to show/hide terminal
+
 ### Performance
 - ✅ Handles 100,000+ line files at 60fps
 - ✅ Sub-millisecond insert/delete operations
@@ -233,6 +241,11 @@ make -j$(sysctl -n hw.ncpu)
 |--------|----------|
 | Commit dialog | `Ctrl+Shift+G` |
 | Branch management | `Ctrl+Shift+B` |
+
+#### Terminal
+| Action | Shortcut |
+|--------|----------|
+| Toggle terminal panel | ``Ctrl+` `` |
 
 ### Mouse Controls
 - **Left click** - Position cursor

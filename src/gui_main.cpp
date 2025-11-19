@@ -13,6 +13,7 @@
 #include "lsp_client.h"
 #include "git_integration.h"
 #include "terminal.h"
+#include "theme.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -101,6 +102,7 @@ public:
         lsp_client_ = std::make_unique<LSPClient>();
         git_manager_ = std::make_unique<GitManager>();
         terminal_ = std::make_unique<EmbeddedTerminal>();
+        theme_ = std::make_unique<Theme>();
         
         // Try to start clangd if available (for C/C++ files)
         // This is optional - editor works fine without it
@@ -1013,7 +1015,7 @@ private:
         HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
         
         // Clear background
-        HBRUSH bgBrush = CreateSolidBrush(RGB(30, 30, 35));
+        HBRUSH bgBrush = CreateSolidBrush(theme_->get_colors().background);
         FillRect(memDC, &client_rect, bgBrush);
         DeleteObject(bgBrush);
         
@@ -1108,7 +1110,7 @@ private:
 
                 // Draw gutter background
                 RECT gutter_rect{ base_left, y, base_left + 70, y + char_height_ };
-                HBRUSH gutterBrush = CreateSolidBrush(RGB(35, 35, 45));
+                HBRUSH gutterBrush = CreateSolidBrush(theme_->get_colors().gutter_background);
                 FillRect(memDC, &gutter_rect, gutterBrush);
                 DeleteObject(gutterBrush);
 
@@ -1117,7 +1119,8 @@ private:
                 GetTextExtentPoint32W(memDC, line_num_str.c_str(), (int)line_num_str.length(), &num_sz);
                 int gutter_right = base_left + 70;
                 int num_x = gutter_right - num_sz.cx - 4; // small padding
-                SetTextColor(memDC, RGB(100, 100, 120));
+                SetTextColor(memDC, line_num == current_line ? 
+                    theme_->get_colors().line_number_active : theme_->get_colors().line_number);
                 TextOutW(memDC, num_x, y, line_num_str.c_str(), (int)line_num_str.length());
                 
                 // Draw fold control if region exists at this line
@@ -3029,7 +3032,24 @@ private:
             SendMessage(hwnd_, WM_SIZE, 0, 0);
         }
         else if (key == VK_F4) {
-            // Toggle relative line numbers
+            // F4 - Cycle themes
+            auto themes = theme_->get_available_themes();
+            auto current = theme_->get_current_theme();
+            auto it = std::find(themes.begin(), themes.end(), current);
+            if (it != themes.end()) {
+                ++it;
+                if (it == themes.end()) it = themes.begin();
+                theme_->load_theme(*it);
+                
+                // Show status message
+                std::wstring msg = L"Theme: ";
+                for (char c : *it) msg += static_cast<wchar_t>(c);
+                show_status_message(msg, 2000);
+            }
+            InvalidateRect(hwnd_, nullptr, TRUE);
+        }
+        else if (key == VK_F5) {
+            // Toggle relative line numbers  
             relative_line_numbers_ = !relative_line_numbers_;
         }
         else if (key == VK_F12) {
@@ -3786,6 +3806,7 @@ private:
     std::unique_ptr<LSPClient> lsp_client_;
     std::unique_ptr<GitManager> git_manager_;
     std::unique_ptr<EmbeddedTerminal> terminal_;
+    std::unique_ptr<Theme> theme_;
 
     // Autocomplete UI state
     bool show_autocomplete_ = false;
