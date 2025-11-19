@@ -97,7 +97,7 @@ public:
         std::vector<Token> tokens; out_state = in_state; size_t i = 0; const size_t n = line.length();
 
         // Try Tree-sitter tokens if available and document text was set (via set_document_lines)
-        if (ts_bridge_ && ts_bridge_->is_available() && current_line_index_ != SIZE_MAX) {
+        if (prefer_ts_ && ts_bridge_ && ts_bridge_->is_available() && current_line_index_ != SIZE_MAX) {
             std::vector<Token> ts_tokens;
             if (ts_bridge_->get_line_tokens(current_line_index_, ts_tokens)) {
                 return ts_tokens; // use TS tokens as authoritative
@@ -187,6 +187,10 @@ public:
     }
     // Optional: tell the highlighter which line number is being tokenized (for TS mapping)
     void set_current_line_index(size_t line_index) { current_line_index_ = line_index; }
+
+    // Toggle whether to prefer Tree-sitter tokens when available
+    void set_prefer_treesitter(bool v) { prefer_ts_ = v; }
+    bool get_prefer_treesitter() const { return prefer_ts_; }
     
 private:
     Language language_ = Language::Cpp;
@@ -194,6 +198,7 @@ private:
     std::unique_ptr<TreeSitterBridge> ts_bridge_;
     std::string ts_lang_id_;
     size_t current_line_index_ = SIZE_MAX;
+    bool prefer_ts_ = true;
 
     bool is_line_comment_start(const std::string& line, size_t i) const {
         if (language_ == Language::Python || language_ == Language::YAML) return line[i] == '#';

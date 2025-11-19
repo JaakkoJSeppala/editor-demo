@@ -2368,6 +2368,14 @@ private:
             // Ctrl+R - Recent files dialog
             show_recent_files_dialog();
         }
+        else if (key == L'T' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+T - Toggle Tree-sitter preference (if integrated)
+            if (highlighter_) {
+                bool cur = highlighter_->get_prefer_treesitter();
+                highlighter_->set_prefer_treesitter(!cur);
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+        }
         else if (key == L'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+F - Toggle find mode
             if (!show_project_search_) {
