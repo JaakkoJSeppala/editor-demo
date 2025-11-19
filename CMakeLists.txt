@@ -46,10 +46,9 @@ if(WIN32)
     endif()
 endif()
 
-# GUI editor (Windows native)
-if(WIN32)
-    # wasm3 library
-    set(WASM3_DIR "${CMAKE_SOURCE_DIR}/third_party/wasm3")
+# wasm3 library (cross-platform)
+set(WASM3_DIR "${CMAKE_SOURCE_DIR}/third_party/wasm3")
+if(EXISTS "${WASM3_DIR}/source")
     file(GLOB WASM3_SOURCES "${WASM3_DIR}/source/*.c")
     add_library(wasm3 STATIC ${WASM3_SOURCES})
     target_include_directories(wasm3 PUBLIC "${WASM3_DIR}/source")
@@ -59,8 +58,11 @@ if(WIN32)
     else()
         target_compile_options(wasm3 PRIVATE -w)
     endif()
+endif()
 
-    # Platform abstraction test
+# GUI editor (cross-platform)
+if(WIN32)
+    # Platform abstraction test (Windows)
     add_executable(platform_test
         src/platform_test.cpp
         src/platform_types.cpp
@@ -199,6 +201,96 @@ if(WIN32)
     endif()
 
     message(STATUS "Building Win32 GUI editor")
+elseif(UNIX AND NOT APPLE)
+    # Linux platform with GTK4
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK4 REQUIRED gtk4)
+    pkg_check_modules(CAIRO REQUIRED cairo)
+    pkg_check_modules(PANGO REQUIRED pango)
+
+    # Platform abstraction test (Linux)
+    add_executable(platform_test
+        src/platform_test.cpp
+        src/platform_types.cpp
+        src/platform_window_gtk.cpp
+    )
+    target_include_directories(platform_test PRIVATE include ${GTK4_INCLUDE_DIRS})
+    target_link_libraries(platform_test PRIVATE ${GTK4_LIBRARIES} ${CAIRO_LIBRARIES} ${PANGO_LIBRARIES})
+    target_compile_options(platform_test PRIVATE ${GTK4_CFLAGS_OTHER})
+
+    add_executable(editor_gui
+        src/gui_main.cpp
+        src/piece_table.cpp
+        src/viewport.cpp
+        src/indexer.cpp
+        src/undo_manager.cpp
+        src/find_dialog.cpp
+        src/treesitter_bridge.cpp
+        src/lsp_client.cpp
+        src/git_integration.cpp
+        src/terminal.cpp
+        src/theme.cpp
+        src/wasm_runtime.cpp
+        src/plugin_manager.cpp
+    )
+
+    target_include_directories(editor_gui PRIVATE include external/json ${GTK4_INCLUDE_DIRS})
+    target_link_libraries(editor_gui PRIVATE ${GTK4_LIBRARIES} ${CAIRO_LIBRARIES} ${PANGO_LIBRARIES})
+    if(TARGET wasm3)
+        target_link_libraries(editor_gui PRIVATE wasm3)
+    endif()
+    target_compile_options(editor_gui PRIVATE -Wall -Wextra -O3 ${GTK4_CFLAGS_OTHER})
+
+    if(ENABLE_TREESITTER)
+        target_compile_definitions(editor_gui PRIVATE ENABLE_TREESITTER=1)
+        set(TS_ROOT ${CMAKE_SOURCE_DIR}/external/tree-sitter)
+
+        if(EXISTS ${TS_ROOT}/lib/src/lib.c)
+            add_library(tree-sitter STATIC ${TS_ROOT}/lib/src/lib.c)
+            target_include_directories(tree-sitter PUBLIC ${TS_ROOT}/lib/include)
+            message(STATUS "Found tree-sitter core: ${TS_ROOT}")
+        endif()
+
+        # Helper macro for grammars
+        macro(add_ts_grammar LANG_NAME LANG_PATH)
+            if(EXISTS ${LANG_PATH}/src/parser.c)
+                set(SRCS ${LANG_PATH}/src/parser.c)
+                if(EXISTS ${LANG_PATH}/src/scanner.cc)
+                    list(APPEND SRCS ${LANG_PATH}/src/scanner.cc)
+                elseif(EXISTS ${LANG_PATH}/src/scanner.c)
+                    list(APPEND SRCS ${LANG_PATH}/src/scanner.c)
+                endif()
+                add_library(tree-sitter-${LANG_NAME} STATIC ${SRCS})
+                target_include_directories(tree-sitter-${LANG_NAME} PUBLIC ${LANG_PATH}/src ${TS_ROOT}/lib/include)
+                message(STATUS "Found tree-sitter-${LANG_NAME} grammar")
+            endif()
+        endmacro()
+
+        add_ts_grammar(c ${CMAKE_SOURCE_DIR}/external/tree-sitter-c)
+        add_ts_grammar(cpp ${CMAKE_SOURCE_DIR}/external/tree-sitter-cpp)
+        add_ts_grammar(python ${CMAKE_SOURCE_DIR}/external/tree-sitter-python)
+        add_ts_grammar(javascript ${CMAKE_SOURCE_DIR}/external/tree-sitter-javascript)
+        add_ts_grammar(json ${CMAKE_SOURCE_DIR}/external/tree-sitter-json)
+        add_ts_grammar(yaml ${CMAKE_SOURCE_DIR}/external/tree-sitter-yaml)
+
+        if(TARGET tree-sitter)
+            target_link_libraries(editor_gui PRIVATE tree-sitter)
+        endif()
+        set(TS_GRAMMARS c cpp python javascript json yaml)
+        foreach(GRAMMAR ${TS_GRAMMARS})
+            if(TARGET tree-sitter-${GRAMMAR})
+                target_link_libraries(editor_gui PRIVATE tree-sitter-${GRAMMAR})
+            endif()
+        endforeach()
+
+        if(EXISTS ${TS_ROOT}/lib/include/tree_sitter/api.h)
+            target_include_directories(editor_gui PRIVATE ${TS_ROOT}/lib/include)
+        endif()
+
+        message(STATUS "Tree-sitter enabled for Linux build")
+    endif()
+
+    message(STATUS "Building GTK4 GUI editor for Linux")
 endif()
 
 # Compiler flags for optimization
