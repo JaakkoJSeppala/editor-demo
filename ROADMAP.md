@@ -368,13 +368,15 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Effort:** 3 weeks → Core terminal complete
 
 ### Theme System
-- [ ] Theme definition format (JSON)
-- [ ] Built-in themes (Dark+, Light+, Monokai)
-- [ ] Color token mapping
-- [ ] UI element theming
+- [x] Theme definition format (ColorScheme struct)
+- [x] Built-in themes (Dark+, Light+, Monokai)
+- [x] Color token mapping (40+ colors)
+- [x] UI element theming
+- [x] Live theme switching (F4 to cycle)
+- [ ] JSON theme loading/saving (future enhancement)
 - [ ] Theme marketplace (future)
 - **Priority:** 🟢 Nice to have
-- **Effort:** 2 weeks
+- **Effort:** 2 weeks → COMPLETE
 
 ### Settings UI
 - [ ] Settings JSON editor

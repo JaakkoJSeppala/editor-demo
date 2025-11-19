@@ -75,6 +75,12 @@ Modern text editors struggle with large projects:
 - ✅ **Scrollback Buffer** - 10k line history with scrolling
 - ✅ **Toggle Panel** - Ctrl+` to show/hide terminal
 
+### Theme System (Phase 6)
+- ✅ **Built-in Themes** - Dark+, Light+, Monokai
+- ✅ **40+ Color Tokens** - comprehensive theming (editor, syntax, UI, terminal, git)
+- ✅ **Live Theme Switching** - F4 to cycle themes without restart
+- ✅ **Theme Categories** - editor, gutter, syntax, UI, terminal, git, diagnostics
+
 ### Performance
 - ✅ Handles 100,000+ line files at 60fps
 - ✅ Sub-millisecond insert/delete operations
@@ -246,6 +252,12 @@ make -j$(sysctl -n hw.ncpu)
 | Action | Shortcut |
 |--------|----------|
 | Toggle terminal panel | ``Ctrl+` `` |
+
+#### Themes
+| Action | Shortcut |
+|--------|----------|
+| Cycle themes (Dark+/Light+/Monokai) | `F4` |
+| Toggle relative line numbers | `F5` |
 
 ### Mouse Controls
 - **Left click** - Position cursor
