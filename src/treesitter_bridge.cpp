@@ -5,9 +5,15 @@
 #include <tree_sitter/api.h>
 
 extern "C" {
-    // Only bind C/C++ for now; extend as needed
+    // Language parsers
     const TSLanguage *tree_sitter_c();
     const TSLanguage *tree_sitter_cpp();
+    const TSLanguage *tree_sitter_python();
+    const TSLanguage *tree_sitter_javascript();
+    const TSLanguage *tree_sitter_typescript();
+    const TSLanguage *tree_sitter_json();
+    const TSLanguage *tree_sitter_yaml();
+    const TSLanguage *tree_sitter_markdown();
 }
 #endif
 
@@ -38,6 +44,12 @@ bool TreeSitterBridge::initialize(const std::string& lang_id) {
     const TSLanguage* lang = nullptr;
     if (lang_id == "c") lang = tree_sitter_c();
     else if (lang_id == "cpp") lang = tree_sitter_cpp();
+    else if (lang_id == "python") lang = tree_sitter_python();
+    else if (lang_id == "javascript") lang = tree_sitter_javascript();
+    else if (lang_id == "typescript") lang = tree_sitter_typescript();
+    else if (lang_id == "json") lang = tree_sitter_json();
+    else if (lang_id == "yaml") lang = tree_sitter_yaml();
+    else if (lang_id == "markdown") lang = tree_sitter_markdown();
 
     if (!lang) {
         impl_->available = false;
