@@ -11,6 +11,7 @@
 #include "minimap.h"
 #include "autocomplete.h"
 #include "lsp_client.h"
+#include "git_integration.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -93,6 +94,7 @@ public:
     {
         autocomplete_ = std::make_unique<AutocompleteManager>();
         lsp_client_ = std::make_unique<LSPClient>();
+        git_manager_ = std::make_unique<GitManager>();
         
         // Try to start clangd if available (for C/C++ files)
         // This is optional - editor works fine without it
@@ -100,6 +102,11 @@ public:
         GetCurrentDirectoryA(MAX_PATH, cwd);
         lsp_client_->start_server("clangd", std::string(cwd));
         lsp_client_->initialize(std::string(cwd));
+        
+        // Detect git repository
+        if (git_manager_->detect_repository(std::string(cwd))) {
+            git_manager_->refresh_status();
+        }
         
         // Set up diagnostics callback
         lsp_client_->set_diagnostics_callback([this](const std::string& uri, const std::vector<LSPClient::Diagnostic>& diags) {
@@ -295,6 +302,85 @@ private:
     void show_status_message(const std::wstring& msg, int duration_ms) {
         status_message_ = msg;
         status_message_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(duration_ms);
+    }
+
+    void show_commit_dialog() {
+        // Simple commit dialog with message box
+        // In the future, this could be a custom dialog with file list and checkboxes
+        
+        // Get modified and staged files
+        auto modified = git_manager_->get_modified_files();
+        auto staged = git_manager_->get_staged_files();
+        
+        // Build dialog message
+        std::wstring info = L"Git Commit\n\n";
+        if (!staged.empty()) {
+            info += L"Staged files (" + std::to_wstring(staged.size()) + L"):\n";
+            for (const auto& f : staged) {
+                std::wstring wf;
+                for (char c : f) wf += static_cast<wchar_t>(c);
+                info += L"  ✓ " + wf + L"\n";
+            }
+        }
+        if (!modified.empty()) {
+            info += L"\nModified files (" + std::to_wstring(modified.size()) + L"):\n";
+            for (const auto& f : modified) {
+                std::wstring wf;
+                for (char c : f) wf += static_cast<wchar_t>(c);
+                info += L"  • " + wf + L"\n";
+            }
+        }
+        
+        if (staged.empty()) {
+            MessageBoxW(hwnd_, L"No files staged for commit.\nUse git add to stage files.", L"Git Commit", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        
+        // Simple commit message input
+        wchar_t commit_msg[256] = L"";
+        // Create a simple input dialog using MessageBox for now
+        // TODO: Replace with custom dialog with proper text area and file list
+        
+        // For now, use a simple approach: show info and ask user to type commit message in console
+        info += L"\nPress OK to commit with default message, or Cancel to abort.";
+        
+        int result = MessageBoxW(hwnd_, info.c_str(), L"Git Commit", MB_OKCANCEL | MB_ICONQUESTION);
+        if (result == IDOK) {
+            std::string msg = "Update from editor";
+            if (git_manager_->commit(msg)) {
+                show_status_message(L"Committed successfully!", 3000);
+                // Refresh git status
+                git_manager_->refresh_status();
+                InvalidateRect(hwnd_, nullptr, TRUE);
+            } else {
+                MessageBoxW(hwnd_, L"Commit failed. Check git configuration.", L"Error", MB_OK | MB_ICONERROR);
+            }
+        }
+    }
+
+    void show_branch_menu() {
+        auto branches = git_manager_->get_branches();
+        
+        if (branches.empty()) {
+            MessageBoxW(hwnd_, L"No branches found.", L"Git Branches", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        
+        // Build branch list message
+        std::wstring info = L"Git Branches\n\n";
+        info += L"Current: " + std::wstring(git_manager_->get_current_branch().begin(), 
+                                            git_manager_->get_current_branch().end()) + L"\n\n";
+        info += L"All branches:\n";
+        for (const auto& branch : branches) {
+            std::wstring name;
+            for (char c : branch.name) name += static_cast<wchar_t>(c);
+            info += (branch.is_current ? L"  → " : L"    ") + name + L"\n";
+        }
+        
+        info += L"\nBranch management features coming soon!\n";
+        info += L"(Create, switch, delete branches)";
+        
+        MessageBoxW(hwnd_, info.c_str(), L"Git Branches", MB_OK | MB_ICONINFORMATION);
     }
 
     // Split view helper functions
@@ -515,7 +601,37 @@ private:
             case WM_NOTIFY: {
                 LPNMHDR hdr = reinterpret_cast<LPNMHDR>(lParam);
                 if (hdr && hdr->hwndFrom == tree_hwnd_) {
-                    if (hdr->code == NM_DBLCLK) {
+                    if (hdr->code == NM_CUSTOMDRAW) {
+                        // Custom draw for git status colors
+                        LPNMTVCUSTOMDRAW cd = reinterpret_cast<LPNMTVCUSTOMDRAW>(lParam);
+                        if (cd->nmcd.dwDrawStage == CDDS_PREPAINT) {
+                            return CDRF_NOTIFYITEMDRAW;
+                        } else if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+                            if (git_manager_ && git_manager_->is_git_repository()) {
+                                TreeNode* node = reinterpret_cast<TreeNode*>(cd->nmcd.lItemlParam);
+                                if (node && !node->is_directory) {
+                                    auto status = git_manager_->get_file_status(node->full_path);
+                                    switch (status) {
+                                        case GitFileStatus::Modified:
+                                            cd->clrText = RGB(255, 200, 0); // Yellow for modified
+                                            break;
+                                        case GitFileStatus::Added:
+                                            cd->clrText = RGB(100, 255, 100); // Green for added
+                                            break;
+                                        case GitFileStatus::Deleted:
+                                            cd->clrText = RGB(255, 100, 100); // Red for deleted
+                                            break;
+                                        case GitFileStatus::Untracked:
+                                            cd->clrText = RGB(150, 150, 255); // Blue for untracked
+                                            break;
+                                        default:
+                                            break;
+                                    }
+                                }
+                            }
+                            return CDRF_DODEFAULT;
+                        }
+                    } else if (hdr->code == NM_DBLCLK) {
                         // Open file on double click
                         HTREEITEM sel = TreeView_GetSelection(tree_hwnd_);
                         if (sel) {
@@ -1027,6 +1143,33 @@ private:
                     }
                 }
                 
+                // Draw git diff indicators in gutter
+                if (git_manager_ && git_manager_->is_git_repository() && !current_file_.empty()) {
+                    auto diff_hunks = git_manager_->get_file_diff(current_file_);
+                    for (const auto& hunk : diff_hunks) {
+                        if (line_num >= hunk.start_line && line_num < hunk.start_line + hunk.line_count) {
+                            // Draw colored bar on left edge of gutter
+                            COLORREF bar_color;
+                            switch (hunk.type) {
+                                case GitDiffHunk::Type::Added:
+                                    bar_color = RGB(100, 255, 100); // Green
+                                    break;
+                                case GitDiffHunk::Type::Modified:
+                                    bar_color = RGB(255, 200, 0); // Yellow
+                                    break;
+                                case GitDiffHunk::Type::Deleted:
+                                    bar_color = RGB(255, 100, 100); // Red
+                                    break;
+                            }
+                            RECT bar_rect{ base_left, y, base_left + 3, y + char_height_ };
+                            HBRUSH barBrush = CreateSolidBrush(bar_color);
+                            FillRect(memDC, &bar_rect, barBrush);
+                            DeleteObject(barBrush);
+                            break; // Only draw one indicator per line
+                        }
+                    }
+                }
+                
                 text_x_offset = base_left + 70; // Offset for text when line numbers are shown
             }
             
@@ -1368,6 +1511,15 @@ private:
         stats << L"View: " << viewport_.get_top_line() + 1 << L"\n";
         stats << L"Render: " << std::fixed << std::setprecision(2) 
               << viewport_.get_last_render_time_ms() << L"ms\n";
+        
+        // Show git branch if in repository
+        if (git_manager_ && git_manager_->is_git_repository()) {
+            std::wstring branch_name;
+            for (char c : git_manager_->get_current_branch()) {
+                branch_name += static_cast<wchar_t>(c);
+            }
+            stats << L"Branch: " << branch_name << L"\n";
+        }
         
         if (show_find_) {
             std::wstring wfind;
@@ -1737,6 +1889,32 @@ private:
                 int num_x = pane_rect.left + 70 - num_sz.cx - 4;
                 SetTextColor(memDC, RGB(100, 100, 120));
                 TextOutW(memDC, num_x, y, line_num_str.c_str(), (int)line_num_str.length());
+                
+                // Draw git diff indicators in gutter
+                if (git_manager_ && git_manager_->is_git_repository() && !current_file_.empty()) {
+                    auto diff_hunks = git_manager_->get_file_diff(current_file_);
+                    for (const auto& hunk : diff_hunks) {
+                        if (line_num >= hunk.start_line && line_num < hunk.start_line + hunk.line_count) {
+                            COLORREF bar_color;
+                            switch (hunk.type) {
+                                case GitDiffHunk::Type::Added:
+                                    bar_color = RGB(100, 255, 100);
+                                    break;
+                                case GitDiffHunk::Type::Modified:
+                                    bar_color = RGB(255, 200, 0);
+                                    break;
+                                case GitDiffHunk::Type::Deleted:
+                                    bar_color = RGB(255, 100, 100);
+                                    break;
+                            }
+                            RECT bar_rect{ pane_rect.left, y, pane_rect.left + 3, y + char_height_ };
+                            HBRUSH barBrush = CreateSolidBrush(bar_color);
+                            FillRect(memDC, &bar_rect, barBrush);
+                            DeleteObject(barBrush);
+                            break;
+                        }
+                    }
+                }
             }
             
             // Current line highlighting
@@ -2554,6 +2732,18 @@ private:
             if (show_find_) {
                 find_text_.clear();
                 find_dialog_->clear_matches();
+            }
+        }
+        else if (key == L'G' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+G - Git commit dialog
+            if (git_manager_ && git_manager_->is_git_repository()) {
+                show_commit_dialog();
+            }
+        }
+        else if (key == L'B' && (GetKeyState(VK_CONTROL) & 0x8000) && (GetKeyState(VK_SHIFT) & 0x8000)) {
+            // Ctrl+Shift+B - Branch management
+            if (git_manager_ && git_manager_->is_git_repository()) {
+                show_branch_menu();
             }
         }
         else if (key == L'H' && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -3512,6 +3702,7 @@ private:
     std::unique_ptr<Minimap> minimap_;
     std::unique_ptr<AutocompleteManager> autocomplete_;
     std::unique_ptr<LSPClient> lsp_client_;
+    std::unique_ptr<GitManager> git_manager_;
 
     // Autocomplete UI state
     bool show_autocomplete_ = false;

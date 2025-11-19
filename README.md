@@ -59,6 +59,14 @@ Modern text editors struggle with large projects:
 - ✅ **Hover Tooltips** - see type information and documentation on hover
 - ✅ **clangd Integration** - full C/C++ language support
 
+### Version Control (Phase 5)
+- ✅ **Git Integration** - native git repository support
+- ✅ **File Status Indicators** - color-coded files in tree (yellow=modified, green=added, blue=untracked)
+- ✅ **Diff Gutter** - visual indicators for added/modified/deleted lines
+- ✅ **Branch Display** - current branch shown in status bar
+- ✅ **Commit Dialog** - Ctrl+Shift+G to commit staged files
+- ✅ **Branch Management** - Ctrl+Shift+B to view branches
+
 ### Performance
 - ✅ Handles 100,000+ line files at 60fps
 - ✅ Sub-millisecond insert/delete operations
@@ -219,6 +227,12 @@ make -j$(sysctl -n hw.ncpu)
 | Autocomplete | `Ctrl+Space` |
 | Accept autocomplete | `Tab` or `Enter` |
 | Load demo (50k lines) | `Ctrl+L` |
+
+#### Git Operations
+| Action | Shortcut |
+|--------|----------|
+| Commit dialog | `Ctrl+Shift+G` |
+| Branch management | `Ctrl+Shift+B` |
 
 ### Mouse Controls
 - **Left click** - Position cursor

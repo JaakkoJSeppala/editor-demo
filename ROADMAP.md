@@ -297,40 +297,52 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 **Target: Git integration**
 
 ### Git Status
-- [ ] Detect git repository
-- [ ] Show file status in tree
-- [ ] Modified/added/deleted indicators
-- [ ] Diff view in gutter
-- [ ] Stage/unstage files
+- [x] Detect git repository
+- [x] File status tracking (modified/added/deleted/untracked)
+- [x] Git command execution via CreateProcess
+- [x] Status parsing (porcelain format)
+- [ ] Show file status indicators in tree UI
+- [ ] Diff view in gutter UI
+- [ ] Stage/unstage UI integration
 - **Priority:** 🟡 Important
-- **Effort:** 2 weeks
+- **Effort:** 2 weeks → Foundation complete, GUI integration in progress
 
 ### Diff Viewer
-- [ ] Side-by-side diff
-- [ ] Inline diff
-- [ ] Previous/next change
-- [ ] Stage hunks
-- [ ] Discard changes
+- [x] Diff parsing (unified format)
+- [x] Get file diff hunks
+- [ ] Side-by-side diff UI
+- [ ] Inline diff UI
+- [ ] Previous/next change navigation
+- [ ] Stage hunks UI
+- [ ] Discard changes UI
 - **Priority:** 🟡 Important
-- **Effort:** 2 weeks
+- **Effort:** 2 weeks → Diff parsing complete, UI in progress
 
 ### Commit Interface
-- [ ] Commit message editor
-- [ ] Stage/unstage UI
-- [ ] Amend commit
-- [ ] Commit history
+- [x] Commit operations (commit, amend)
+- [x] Stage/unstage operations
+- [x] Commit history retrieval
+- [ ] Commit message editor UI
+- [ ] Stage/unstage visual interface
+- [ ] History viewer UI
 - **Priority:** 🟡 Important
-- **Effort:** 1 week
+- **Effort:** 1 week → Backend complete, UI in progress
 
 ### Branch Management
-- [ ] List branches
-- [ ] Switch branch
-- [ ] Create branch
-- [ ] Merge/rebase
+- [x] List branches
+- [x] Switch branch
+- [x] Create branch
+- [x] Delete branch
+- [x] Current branch tracking
+- [ ] Branch UI in status bar
+- [ ] Branch switching menu
+- [ ] Merge/rebase operations
 - **Priority:** 🟢 Nice to have
-- **Effort:** 2 weeks
+- **Effort:** 2 weeks → Core operations complete, UI in progress
 
 **Deliverable:** Integrated Git workflow without leaving the editor.
+
+**Progress:** Git foundation complete (GitManager class with repository detection, status tracking, diff parsing, staging, commits, branch management). Next: GUI integration (file tree colors, status bar, commit dialog).
 
 ---
 
