@@ -55,6 +55,8 @@ Modern text editors struggle with large projects:
 - ✅ **Smart Code Completion** - context-aware suggestions from LSP server
 - ✅ **Live Error Diagnostics** - red squiggles under errors as you type
 - ✅ **Go to Definition (F12)** - jump to symbol definitions across files
+- ✅ **Find References (Shift+F12)** - find all usages of a symbol
+- ✅ **Hover Tooltips** - see type information and documentation on hover
 - ✅ **clangd Integration** - full C/C++ language support
 
 ### Performance
@@ -177,6 +179,7 @@ make -j$(sysctl -n hw.ncpu)
 | Find next/previous | `F3` / `Shift+F3` |
 | Find in files | `Ctrl+Shift+F` |
 | Go to definition | `F12` |
+| Find references | `Shift+F12` |
 
 #### Multi-Cursor
 | Action | Shortcut |

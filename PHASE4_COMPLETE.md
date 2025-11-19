@@ -44,6 +44,18 @@ Phase 4 implements Language Server Protocol (LSP) integration, bringing IDE-leve
 - Centered viewport on target location
 - Works with functions, classes, variables, etc.
 
+#### Find References (Shift+F12)
+- Find all usages of a symbol across the project
+- Status message shows reference count
+- Jumps to first reference
+- Full reference panel UI pending
+
+#### Hover Tooltips
+- Win32 tooltip window integration
+- Shows type information and documentation
+- Appears after 500ms hover delay
+- Uses LSP request_hover API
+
 ### 5. GUI Integration
 - LSP client member in main GUI class
 - Diagnostics storage for rendering

@@ -204,6 +204,23 @@ public:
         ShowWindow(hwnd_, SW_SHOW);
         UpdateWindow(hwnd_);
 
+        // Create tooltip window for LSP hover
+        hover_tooltip_ = CreateWindowExW(
+            WS_EX_TOPMOST,
+            TOOLTIPS_CLASSW,
+            nullptr,
+            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+            hwnd_,
+            nullptr,
+            hInstance_,
+            nullptr
+        );
+        
+        if (hover_tooltip_) {
+            SetWindowPos(hover_tooltip_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
         // Create file tree view control
         DWORD treeStyle = WS_CHILD | WS_VISIBLE | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS;
         RECT cr{}; GetClientRect(hwnd_, &cr);
@@ -707,6 +724,19 @@ private:
                     // Dragging to select
                     on_mouse_drag(LOWORD(lParam), HIWORD(lParam));
                     InvalidateRect(hwnd_, nullptr, FALSE);
+                } else {
+                    // Track hover for LSP tooltips
+                    POINT mouse_pos = {LOWORD(lParam), HIWORD(lParam)};
+                    
+                    // Check if mouse moved significantly
+                    if (abs(mouse_pos.x - last_hover_pos_.x) > 2 || abs(mouse_pos.y - last_hover_pos_.y) > 2) {
+                        last_hover_pos_ = mouse_pos;
+                        hover_start_time_ = std::chrono::steady_clock::now();
+                        hover_tooltip_shown_ = false;
+                        if (hover_tooltip_) {
+                            SendMessageW(hover_tooltip_, TTM_POP, 0, 0);  // Hide existing tooltip
+                        }
+                    }
                 }
                 return 0;
                 
@@ -733,6 +763,62 @@ private:
                     // Cursor blink timer
                     cursor_visible_ = !cursor_visible_;
                     cursor_blink_time_++;
+                    
+                    // Check for hover tooltip (show after 500ms of hovering)
+                    if (!hover_tooltip_shown_ && lsp_client_ && !current_file_.empty()) {
+                        auto now = std::chrono::steady_clock::now();
+                        auto hover_duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - hover_start_time_).count();
+                        
+                        if (hover_duration > 500) {
+                            // Request hover information
+                            POINT screen_pt = last_hover_pos_;
+                            int mx = screen_pt.x;
+                            int my = screen_pt.y;
+                            
+                            // Convert mouse position to document position
+                            int content_top = get_content_top();
+                            int content_left = get_content_left();
+                            int text_x_offset = content_left + (show_line_numbers_ ? 70 : 0);
+                            
+                            if (mx >= text_x_offset && my >= content_top) {
+                                size_t line_idx = viewport_.get_top_line() + (my - content_top) / char_height_;
+                                size_t col_idx = (mx - text_x_offset) / char_width_;
+                                
+                                lsp_client_->request_hover(
+                                    "file:///" + current_file_,
+                                    (int)line_idx,
+                                    (int)col_idx,
+                                    [this, screen_pt](const LSPClient::Hover& hover) {
+                                        if (!hover.contents.empty() && hover_tooltip_) {
+                                            // Show tooltip
+                                            hover_text_ = hover.contents;
+                                            
+                                            // Convert to wide string for tooltip
+                                            std::wstring wide_text;
+                                            for (char c : hover.contents) {
+                                                wide_text += (wchar_t)c;
+                                            }
+                                            
+                                            TOOLINFOW ti = {};
+                                            ti.cbSize = sizeof(TOOLINFOW);
+                                            ti.uFlags = TTF_TRACK | TTF_ABSOLUTE;
+                                            ti.hwnd = hwnd_;
+                                            ti.lpszText = const_cast<wchar_t*>(wide_text.c_str());
+                                            
+                                            SendMessageW(hover_tooltip_, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+                                            SendMessageW(hover_tooltip_, TTM_TRACKACTIVATE, TRUE, (LPARAM)&ti);
+                                            
+                                            POINT client_pt = screen_pt;
+                                            ClientToScreen(hwnd_, &client_pt);
+                                            SendMessageW(hover_tooltip_, TTM_TRACKPOSITION, 0, MAKELPARAM(client_pt.x, client_pt.y + 20));
+                                            
+                                            hover_tooltip_shown_ = true;
+                                        }
+                                    }
+                                );
+                            }
+                        }
+                    }
                     
                     // Only invalidate the cursor area, not the whole window
                     RECT cursor_rect;
@@ -2675,32 +2761,41 @@ private:
             relative_line_numbers_ = !relative_line_numbers_;
         }
         else if (key == VK_F12) {
-            // F12 - Go to definition
+            // F12 - Go to definition / Shift+F12 - Find references
+            bool shift = GetKeyState(VK_SHIFT) & 0x8000;
+            
             if (lsp_client_ && !current_file_.empty()) {
                 size_t line_idx = get_cursor_line();
                 size_t col_idx = get_cursor_column();
                 
-                lsp_client_->request_definition(
-                    "file:///" + current_file_,
-                    (int)line_idx,
-                    (int)col_idx,
-                    [this](const std::vector<LSPClient::Location>& locations) {
-                        if (!locations.empty()) {
-                            const auto& loc = locations[0];
-                            // Extract file path from URI (remove file:///)
-                            std::string path = loc.uri;
-                            if (path.find("file:///") == 0) {
-                                path = path.substr(8);
-                            }
-                            
-                            // Load file content
-                            current_file_ = path;
-                            std::ifstream file(path, std::ios::binary);
-                            if (file) {
-                                std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-                                document_ = std::make_unique<PieceTable>(content);
+                if (shift) {
+                    // Find all references
+                    lsp_client_->request_references(
+                        "file:///" + current_file_,
+                        (int)line_idx,
+                        (int)col_idx,
+                        [this](const std::vector<LSPClient::Location>& locations) {
+                            if (!locations.empty()) {
+                                std::wostringstream msg;
+                                msg << L"Found " << locations.size() << L" reference(s)";
+                                show_status_message(msg.str(), 3000);
                                 
-                                // Calculate cursor position from line/character
+                                // Jump to first reference
+                                const auto& loc = locations[0];
+                                std::string path = loc.uri;
+                                if (path.find("file:///") == 0) {
+                                    path = path.substr(8);
+                                }
+                                
+                                if (path != current_file_) {
+                                    current_file_ = path;
+                                    std::ifstream file(path, std::ios::binary);
+                                    if (file) {
+                                        std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                                        document_ = std::make_unique<PieceTable>(content);
+                                    }
+                                }
+                                
                                 size_t target_pos = 0;
                                 for (int i = 0; i < loc.range.start.line && (size_t)i < document_->get_line_count(); ++i) {
                                     target_pos += document_->get_line(i).length() + 1;
@@ -2708,15 +2803,49 @@ private:
                                 target_pos += loc.range.start.character;
                                 cursor_pos_ = target_pos;
                                 
-                                // Center view on cursor
                                 size_t line = get_cursor_line();
                                 viewport_.scroll_to_line(line > 10 ? line - 10 : 0);
-                                
                                 InvalidateRect(hwnd_, nullptr, FALSE);
+                            } else {
+                                show_status_message(L"No references found", 2000);
                             }
                         }
-                    }
-                );
+                    );
+                } else {
+                    // Go to definition
+                    lsp_client_->request_definition(
+                        "file:///" + current_file_,
+                        (int)line_idx,
+                        (int)col_idx,
+                        [this](const std::vector<LSPClient::Location>& locations) {
+                            if (!locations.empty()) {
+                                const auto& loc = locations[0];
+                                std::string path = loc.uri;
+                                if (path.find("file:///") == 0) {
+                                    path = path.substr(8);
+                                }
+                                
+                                current_file_ = path;
+                                std::ifstream file(path, std::ios::binary);
+                                if (file) {
+                                    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+                                    document_ = std::make_unique<PieceTable>(content);
+                                    
+                                    size_t target_pos = 0;
+                                    for (int i = 0; i < loc.range.start.line && (size_t)i < document_->get_line_count(); ++i) {
+                                        target_pos += document_->get_line(i).length() + 1;
+                                    }
+                                    target_pos += loc.range.start.character;
+                                    cursor_pos_ = target_pos;
+                                    
+                                    size_t line = get_cursor_line();
+                                    viewport_.scroll_to_line(line > 10 ? line - 10 : 0);
+                                    InvalidateRect(hwnd_, nullptr, FALSE);
+                                }
+                            }
+                        }
+                    );
+                }
             }
         }
         else if (key == VK_TAB && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -3393,6 +3522,13 @@ private:
     
     // LSP diagnostics
     std::vector<LSPClient::Diagnostic> current_diagnostics_;
+    
+    // Hover tooltip state
+    HWND hover_tooltip_ = nullptr;
+    std::string hover_text_;
+    POINT last_hover_pos_ = {-1, -1};
+    std::chrono::steady_clock::time_point hover_start_time_;
+    bool hover_tooltip_shown_ = false;
     
     bool show_file_tree_;
     int tree_panel_width_;
