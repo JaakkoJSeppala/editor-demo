@@ -1,0 +1,35 @@
+src\editor_test.cpp:4:0: information: Include file: "platform_file.h" not found. [missingInclude]
+#include "platform_file.h"
+^
+src\editor_test.cpp:5:0: information: Include file: "platform_process.h" not found. [missingInclude]
+#include "platform_process.h"
+^
+src\editor_test.cpp:6:0: information: Include file: "gpu_renderer.h" not found. [missingInclude]
+#include "gpu_renderer.h"
+^
+src\editor_test.cpp:7:0: information: Include file: "rope_table.h" not found. [missingInclude]
+#include "rope_table.h"
+^
+src\editor_test.cpp:8:0: information: Include file: "lsp_client.h" not found. [missingInclude]
+#include "lsp_client.h"
+^
+src\editor_test.cpp:9:0: information: Include file: "refactor_api.h" not found. [missingInclude]
+#include "refactor_api.h"
+^
+src\editor_test.cpp:10:0: information: Include file: "build_system.h" not found. [missingInclude]
+#include "build_system.h"
+^
+src\editor_test.cpp:11:0: information: Include file: "build_error_parser.h" not found. [missingInclude]
+#include "build_error_parser.h"
+^
+src\editor_test.cpp:12:0: information: Include file: <iostream> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]
+#include <iostream>
+^
+src\editor_test.cpp:13:0: information: Include file: <vector> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]
+#include <vector>
+^
+src\editor_test.cpp:14:0: information: Include file: <string> not found. Please note: Cppcheck does not need standard library headers to get proper results. [missingIncludeSystem]
+#include <string>
+^
+nofile:0:0: information: Active checkers: 181/966 (use --checkers-report=<filename> to see details) [checkersReport]
+
