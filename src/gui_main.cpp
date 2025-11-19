@@ -9,6 +9,7 @@
 #include "workspace.h"
 #include "code_folding.h"
 #include "minimap.h"
+#include "autocomplete.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <commdlg.h>
@@ -89,6 +90,7 @@ public:
         , dragging_splitter_(false)
         , sync_scrolling_(false)
     {
+        autocomplete_ = std::make_unique<AutocompleteManager>();
         // Initialize with welcome text
         std::string welcome = 
             "HIGH-PERFORMANCE TEXT EDITOR - Win32 Native GUI\n"
@@ -840,6 +842,13 @@ private:
         RECT client_rect_copy = client_rect;
         int base_left = get_content_left();
         
+        // Prepare incremental highlighter state up to top visible line
+        SyntaxHighlighter::LineState hl_state_pre{};
+        for (size_t li = 0; li < line_num; ++li) {
+            SyntaxHighlighter::LineState out{};
+            highlighter_->tokenize_line(document_->get_line(li), hl_state_pre, out);
+            hl_state_pre = out;
+        }
         for (const auto& line : visible_lines) {
             // Skip folded lines
             if (folding_manager_ && !folding_manager_->is_line_visible(line_num)) {
@@ -930,8 +939,10 @@ private:
                 line_start_pos += document_->get_line(i).length() + 1;
             }
             
-            // Tokenize line for syntax highlighting
-            auto tokens = highlighter_->tokenize_line(line);
+            // Tokenize line for syntax highlighting (incremental state)
+            SyntaxHighlighter::LineState hl_state_out{};
+            auto tokens = highlighter_->tokenize_line(line, hl_state_pre, hl_state_out);
+            hl_state_pre = hl_state_out;
             
             // Convert to wide string and render with selection highlighting and syntax colors
             std::wstring wline;
@@ -1026,6 +1037,35 @@ private:
             
             y += char_height_;
             line_num++;
+        }
+
+        // Render autocomplete popup (single-view only)
+        if (show_autocomplete_ && !autocomplete_items_.empty()) {
+            size_t caret_line = get_cursor_line();
+            size_t caret_col = get_cursor_column();
+            int text_x_offset = base_left + (show_line_numbers_ ? 70 : 0);
+            int caret_x = text_x_offset + (int)caret_col * char_width_;
+            int caret_y = get_content_top() + (int)(caret_line - viewport_.get_top_line()) * char_height_ + char_height_;
+
+            int item_h = char_height_;
+            int width = 240;
+            int height = (int)std::min<size_t>(autocomplete_items_.size(), 8) * item_h + 4;
+            RECT popup{ caret_x, caret_y, caret_x + width, caret_y + height };
+            HBRUSH bg = CreateSolidBrush(RGB(35, 35, 45));
+            FillRect(memDC, &popup, bg); DeleteObject(bg);
+            FrameRect(memDC, &popup, (HBRUSH)GetStockObject(GRAY_BRUSH));
+
+            int y0 = popup.top + 2;
+            for (size_t i = 0; i < autocomplete_items_.size() && i < 8; ++i) {
+                RECT item{ popup.left + 4, y0 + (int)i * item_h, popup.right - 4, y0 + (int)(i + 1) * item_h };
+                if ((int)i == autocomplete_index_) {
+                    HBRUSH sel = CreateSolidBrush(RGB(60, 60, 90));
+                    FillRect(memDC, &item, sel); DeleteObject(sel);
+                }
+                std::wstring w; for (char c : autocomplete_items_[i]) w += (wchar_t)c;
+                SetTextColor(memDC, RGB(220, 220, 220));
+                DrawTextW(memDC, w.c_str(), -1, &item, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
         }
         }  // End of split_mode_ == None
 
@@ -1160,6 +1200,9 @@ private:
             cursor_pos_ = tab->cursor_pos;
             is_modified_ = tab->is_modified;
             viewport_.set_document(document_);
+            if (highlighter_) {
+                highlighter_->set_language_by_filename(current_file_);
+            }
         }
         update_title();
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1511,6 +1554,14 @@ private:
             text_x_offset += 70;
         }
         
+        // Prepare incremental state up to pane's top visible line
+        SyntaxHighlighter::LineState pane_state{};
+        for (size_t li = 0; li < line_num; ++li) {
+            SyntaxHighlighter::LineState tmp{};
+            highlighter_->tokenize_line(doc->get_line(li), pane_state, tmp);
+            pane_state = tmp;
+        }
+
         for (const auto& line : visible_lines) {
             // Line numbers
             if (show_line_numbers_) {
@@ -1552,8 +1603,10 @@ private:
                 line_start_pos += doc->get_line(i).length() + 1;
             }
             
-            // Tokenize and render
-            auto tokens = highlighter_->tokenize_line(line);
+            // Tokenize and render (incremental)
+            SyntaxHighlighter::LineState st_out{};
+            auto tokens = highlighter_->tokenize_line(line, pane_state, st_out);
+            pane_state = st_out;
             std::wstring wline;
             for (size_t i = 0; i < line.length(); ++i) {
                 size_t char_pos = line_start_pos + i;
@@ -1825,6 +1878,51 @@ private:
             // Reset cursor blink
             cursor_visible_ = true;
             cursor_blink_time_ = 0;
+
+            // Update autocomplete cache on insert
+            if (autocomplete_) autocomplete_->on_text_inserted(str);
+
+            // Autocomplete trigger: only when single cursor and identifier characters
+            auto is_ident_char = [](char chx){ unsigned char uc = (unsigned char)chx; return std::isalnum(uc) || chx == '_'; };
+            auto is_ident_start = [](char chx){ unsigned char uc = (unsigned char)chx; return std::isalpha(uc) || chx == '_'; };
+            if (!multi_cursor_mode_ && is_ident_char(c)) {
+                // Determine line and column and build prefix
+                size_t pos = 0, line_index = 0, line_start = 0;
+                for (size_t i = 0; i < document_->get_line_count(); ++i) {
+                    std::string line = document_->get_line(i);
+                    size_t line_len = line.length() + 1;
+                    if (pos + line_len > cursor_pos_) { line_index = i; line_start = pos; break; }
+                    pos += line_len;
+                }
+                std::string line = document_->get_line(line_index);
+                size_t col = cursor_pos_ - line_start; // after insertion
+                // Scan left to find start of identifier
+                size_t start = (col == 0) ? 0 : col - 1;
+                while (start > 0 && is_ident_char(line[start-1])) start--;
+                if (start < line.size() && is_ident_start(line[start])) {
+                    std::string prefix = line.substr(start, (std::min)(col, line.size()) - start);
+                    if (prefix.size() >= 2 && autocomplete_) {
+                        auto items = autocomplete_->suggest(prefix);
+                        // Remove exact-match duplicate
+                        items.erase(std::remove(items.begin(), items.end(), prefix), items.end());
+                        if (!items.empty()) {
+                            autocomplete_items_ = std::move(items);
+                            autocomplete_index_ = 0;
+                            autocomplete_anchor_pos_ = line_start + start;
+                            show_autocomplete_ = true;
+                        } else {
+                            show_autocomplete_ = false;
+                        }
+                    } else {
+                        show_autocomplete_ = false;
+                    }
+                } else {
+                    show_autocomplete_ = false;
+                }
+            } else if (!(is_ident_char(c))) {
+                // Hide on whitespace/punctuation
+                show_autocomplete_ = false;
+            }
         }
     }
     
@@ -2034,6 +2132,28 @@ private:
     }
     
     void on_key_down(WPARAM key) {
+        // Handle autocomplete navigation/commit first
+        if (show_autocomplete_) {
+            if (key == VK_ESCAPE) { show_autocomplete_ = false; return; }
+            if (key == VK_UP) { if (autocomplete_index_ > 0) autocomplete_index_--; return; }
+            if (key == VK_DOWN) { if (autocomplete_index_ + 1 < (int)autocomplete_items_.size()) autocomplete_index_++; return; }
+            if (key == VK_TAB || key == VK_RETURN) {
+                if (!autocomplete_items_.empty() && autocomplete_index_ >= 0 && autocomplete_index_ < (int)autocomplete_items_.size()) {
+                    std::string choice = autocomplete_items_[autocomplete_index_];
+                    // Compute current prefix
+                    size_t prefix_len = cursor_pos_ > autocomplete_anchor_pos_ ? (cursor_pos_ - autocomplete_anchor_pos_) : 0;
+                    if (choice.size() > prefix_len) {
+                        std::string suffix = choice.substr(prefix_len);
+                        auto cmd = std::make_unique<InsertCommand>(document_.get(), cursor_pos_, suffix);
+                        undo_manager_->execute(std::move(cmd));
+                        cursor_pos_ += suffix.size();
+                        is_modified_ = true; mark_active_tab_modified(); update_title();
+                    }
+                }
+                show_autocomplete_ = false; return;
+            }
+        }
+
         if (key == VK_ESCAPE) {
             if (show_project_search_) {
                 show_project_search_ = false;
@@ -2358,6 +2478,7 @@ private:
         else if (key == L'V' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             // Ctrl+V - Paste
             paste_from_clipboard();
+            if (autocomplete_) autocomplete_->rebuild_from_document(document_);
         }
         else if (key == L'R' && (GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_SHIFT) & 0x8000)) {
             // Ctrl+R - Replace current match (in replace mode)
@@ -2403,6 +2524,7 @@ private:
                             tab->document = document_;
                         }
                     }
+                    if (autocomplete_) autocomplete_->rebuild_from_document(document_);
                     // Refresh matches
                     perform_find();
                     update_title();
@@ -2593,6 +2715,9 @@ private:
             cursor_pos_ = 0;
             current_file_ = narrow_filename;
             is_modified_ = false;
+            if (highlighter_) {
+                highlighter_->set_language_by_filename(current_file_);
+            }
             
             // Add to recent files
             workspace_manager_.add_recent_file(narrow_filename);
@@ -2604,6 +2729,7 @@ private:
             std::cout << "Lines: " << document_->get_line_count() << "\n";
             std::cout << "Size: " << content.length() << " bytes\n\n";
             
+            if (autocomplete_) autocomplete_->rebuild_from_document(document_);
             update_title();
             InvalidateRect(hwnd_, nullptr, TRUE);
             return true;
@@ -3094,6 +3220,13 @@ private:
     std::unique_ptr<SyntaxHighlighter> highlighter_;
     std::unique_ptr<CodeFoldingManager> folding_manager_;
     std::unique_ptr<Minimap> minimap_;
+    std::unique_ptr<AutocompleteManager> autocomplete_;
+
+    // Autocomplete UI state
+    bool show_autocomplete_ = false;
+    std::vector<std::string> autocomplete_items_;
+    int autocomplete_index_ = 0;
+    size_t autocomplete_anchor_pos_ = 0; // document position where current word starts
     
     bool show_file_tree_;
     int tree_panel_width_;
@@ -3282,6 +3415,7 @@ private:
             size_t idx = tab_manager_->new_tab(content, path);
             switch_to_tab(idx);
             is_modified_ = false;
+            if (autocomplete_) autocomplete_->rebuild_from_document(document_);
             update_title();
         } else {
             if (split_mode_ != SplitMode::None) {
@@ -3298,7 +3432,11 @@ private:
                 viewport_.set_document(document_);
                 current_file_ = path;
                 is_modified_ = false;
+                if (highlighter_) {
+                    highlighter_->set_language_by_filename(current_file_);
+                }
             }
+            if (autocomplete_) autocomplete_->rebuild_from_document(document_);
             update_title();
         }
         refresh_folding();

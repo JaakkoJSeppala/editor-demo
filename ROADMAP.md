@@ -196,21 +196,21 @@ Build the fastest, most scalable text editor for large-scale projects - combinin
 - **Priority:** 🟢 Nice to have
 - **Effort:** 2 weeks
 
-### Advanced Syntax Highlighting
+### Advanced Syntax Highlighting (incremental, multi-language)
+- [x] Python, JavaScript, TypeScript, Rust, Go
+- [x] JSON, YAML, Markdown
+- [x] Incremental parsing (line state)
 - [ ] TextMate grammar support
-- [ ] Python, JavaScript, TypeScript, Rust, Go
-- [ ] JSON, YAML, Markdown
-- [ ] Incremental parsing
 - [ ] TreeSitter integration
 - **Priority:** 🟡 Important
 - **Effort:** 3 weeks
 
 ### Autocomplete (Basic)
-- [ ] Word-based completion
-- [ ] Recent words cache
-- [ ] Popup menu
-- [ ] Arrow key navigation
-- [ ] Tab to complete
+- [x] Word-based completion
+- [x] Recent words cache
+- [x] Popup menu
+- [x] Arrow key navigation
+- [x] Tab/Enter to complete
 - **Priority:** 🟡 Important
 - **Effort:** 2 weeks
 
