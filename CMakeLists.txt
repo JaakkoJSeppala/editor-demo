@@ -39,6 +39,7 @@ if(WIN32)
         src/find_dialog.cpp
         src/treesitter_bridge.cpp
         src/lsp_client.cpp
+        src/git_integration.cpp
     )
 
     target_include_directories(editor_gui PRIVATE include external/json)
