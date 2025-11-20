@@ -58,13 +58,16 @@ private:
     mutable bool line_cache_valid_;
     void rebuild_line_cache() const;
     size_t position_to_piece_index(size_t position) const;
-    // Undo/redo stacks
-    struct PTState {
-        std::vector<Piece> pieces;
-        std::string add_buffer;
+    // Delta-based undo/redo
+    enum class EditType { Insert, Remove };
+    struct EditAction {
+        EditType type;
+        size_t position;
+        std::string text;
     };
-    std::vector<PTState> undo_stack_;
-    std::vector<PTState> redo_stack_;
+    std::vector<EditAction> undo_history_;
+    std::vector<EditAction> redo_history_;
+    static constexpr size_t kMaxHistory = 1000;
 };
 
 #endif // PIECE_TABLE_H

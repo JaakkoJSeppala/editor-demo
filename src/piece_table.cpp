@@ -12,10 +12,12 @@ PieceTable::PieceTable(const std::string& initial_text)
 }
 
 void PieceTable::insert(size_t position, const std::string& text) {
-    undo_stack_.push_back({pieces_, add_buffer_});
-    redo_stack_.clear();
     if (text.empty()) return;
     line_cache_valid_ = false;
+    // Store undo action
+    undo_history_.push_back({EditType::Insert, position, text});
+    if (undo_history_.size() > kMaxHistory) undo_history_.erase(undo_history_.begin());
+    redo_history_.clear();
     
     // Find the piece containing the position
     size_t current_pos = 0;
@@ -74,11 +76,14 @@ void PieceTable::insert(size_t position, const std::string& text) {
 }
 
 void PieceTable::remove(size_t position, size_t length) {
-    undo_stack_.push_back({pieces_, add_buffer_});
-    redo_stack_.clear();
     if (length == 0) return;
-    
     line_cache_valid_ = false;
+    // Store undo action (save removed text)
+    std::string removed = get_text(position, length);
+    undo_history_.push_back({EditType::Remove, position, removed});
+    if (undo_history_.size() > kMaxHistory) undo_history_.erase(undo_history_.begin());
+    redo_history_.clear();
+    
     size_t end_position = position + length;
     size_t current_pos = 0;
     std::vector<Piece> new_pieces;
@@ -205,23 +210,33 @@ std::vector<std::string> PieceTable::get_lines_range(size_t start_line, size_t c
 }
 
 void PieceTable::undo() {
-    if (!undo_stack_.empty()) {
-        redo_stack_.push_back({pieces_, add_buffer_});
-        PTState state = undo_stack_.back();
-        undo_stack_.pop_back();
-        pieces_ = state.pieces;
-        add_buffer_ = state.add_buffer;
-        line_cache_valid_ = false;
+    if (undo_history_.empty()) return;
+    EditAction action = undo_history_.back();
+    undo_history_.pop_back();
+    if (action.type == EditType::Insert) {
+        // Undo insert: remove inserted text
+        remove(action.position, action.text.length());
+        redo_history_.push_back(action);
+        if (redo_history_.size() > kMaxHistory) redo_history_.erase(redo_history_.begin());
+    } else if (action.type == EditType::Remove) {
+        // Undo remove: re-insert removed text
+        insert(action.position, action.text);
+        redo_history_.push_back(action);
+        if (redo_history_.size() > kMaxHistory) redo_history_.erase(redo_history_.begin());
     }
 }
 
 void PieceTable::redo() {
-    if (!redo_stack_.empty()) {
-        undo_stack_.push_back({pieces_, add_buffer_});
-        PTState state = redo_stack_.back();
-        redo_stack_.pop_back();
-        pieces_ = state.pieces;
-        add_buffer_ = state.add_buffer;
-        line_cache_valid_ = false;
+    if (redo_history_.empty()) return;
+    EditAction action = redo_history_.back();
+    redo_history_.pop_back();
+    if (action.type == EditType::Insert) {
+        insert(action.position, action.text);
+        undo_history_.push_back(action);
+        if (undo_history_.size() > kMaxHistory) undo_history_.erase(undo_history_.begin());
+    } else if (action.type == EditType::Remove) {
+        remove(action.position, action.text.length());
+        undo_history_.push_back(action);
+        if (undo_history_.size() > kMaxHistory) undo_history_.erase(undo_history_.begin());
     }
 }
