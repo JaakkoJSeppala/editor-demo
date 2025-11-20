@@ -1,31 +1,30 @@
 #include <iostream>
 #include <string>
-#include "../include/piece_table.h"
-#include "../include/rope_table.h"
+#include <chrono>
+#include "../include/gap_buffer.h"
 
 int main() {
-    std::cout << "Editor-demo kevyt testausohjelma\n";
-    std::cout << "===============================\n";
+    std::cout << "Editor-demo gap buffer suorituskykytesti\n";
+    std::cout << "=======================================\n";
 
-    // PieceTable kevyt testi
+    // GapBuffer suorituskykytesti
     {
-        PieceTable pt;
-        pt.insert(0, "Test");
-        std::string result = pt.get_text(0, 4);
-        std::cout << "PieceTable: " << result << "\n";
-        if (result != "Test") std::cout << "[FAIL] PieceTable basic\n";
+        GapBuffer gb;
+        const size_t N = 100000;
+        std::string sample = "abc";
+        auto start = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < N; ++i) {
+            gb.insert(sample);
+        }
+        auto mid = std::chrono::high_resolution_clock::now();
+        std::string text = gb.get_text();
+        auto end = std::chrono::high_resolution_clock::now();
+        auto insert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(mid - start).count();
+        auto read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - mid).count();
+        std::cout << "GapBuffer: Inserted " << N << " x 'abc' in " << insert_ms << " ms\n";
+        std::cout << "GapBuffer: Read " << text.length() << " chars in " << read_ms << " ms\n";
     }
 
-    // RopeTable kevyt testi
-    {
-        RopeTable rope;
-        rope.insert(0, "xy");
-        rope.insert(2, "z");
-        std::string result = rope.get_text(0, rope.get_total_length());
-        std::cout << "RopeTable: " << result << "\n";
-        if (result != "xyz") std::cout << "[FAIL] RopeTable basic\n";
-    }
-
-    std::cout << "Kevyet testit suoritettu.\n";
+    std::cout << "GapBuffer suorituskykytesti suoritettu.\n";
     return 0;
 }

@@ -57,10 +57,7 @@ public:
     void set_language(Language lang) {
         language_ = lang;
         rebuild_keywords();
-        // Initialize Tree-sitter bridge for this language (optional)
-        ts_lang_id_ = language_to_id(language_);
-        if (!ts_bridge_) ts_bridge_ = std::make_unique<TreeSitterBridge>();
-        ts_bridge_->initialize(ts_lang_id_);
+        // Tree-sitter bridge removed for minimal build
     }
 
     void set_language_by_filename(const std::string& filename) {
@@ -88,117 +85,22 @@ public:
         } else {
             set_language(Language::Cpp); // fallback reasonable default
         }
-        // Update TS language id after filename detection
-        ts_lang_id_ = language_to_id(language_);
+        // Tree-sitter bridge removed for minimal build
     }
     
     // Incremental tokenization with line state
-    std::vector<Token> tokenize_line(const std::string& line, const LineState& in_state, LineState& out_state) {
-        std::vector<Token> tokens; out_state = in_state; size_t i = 0; const size_t n = line.length();
-
-        // Try Tree-sitter tokens if available and document text was set (via set_document_lines)
-        if (prefer_ts_ && ts_bridge_ && ts_bridge_->is_available() && current_line_index_ != SIZE_MAX) {
-            std::vector<Token> ts_tokens;
-            if (ts_bridge_->get_line_tokens(current_line_index_, ts_tokens)) {
-                return ts_tokens; // use TS tokens as authoritative
-            }
-        }
-
-        auto emit_string = [&](size_t start_idx, char delim){
-            size_t i2 = start_idx + 1;
-            while (i2 < n) {
-                if (line[i2] == '\\' && i2 + 1 < n) { i2 += 2; continue; }
-                if (line[i2] == delim) { i2++; out_state.string_delim = 0; break; }
-                i2++;
-            }
-            if (i2 >= n && line[n? n-1:0] != delim) { out_state.string_delim = delim; }
-            tokens.push_back({Token::STRING, start_idx, i2 - start_idx});
-            return i2;
-        };
-
-        // If continuing string from previous line
-        if (out_state.string_delim) {
-            i = emit_string(0, out_state.string_delim);
-        }
-
-        // If inside block comment, consume until close
-        if (out_state.in_block_comment) {
-            size_t start = i; bool closed = false;
-            for (; i + 1 < n; ++i) { if (line[i] == '*' && line[i+1] == '/') { i += 2; closed = true; break; } }
-            tokens.push_back({Token::COMMENT, start, i - start});
-            out_state.in_block_comment = !closed;
-        }
-
-        while (i < n) {
-            if (std::isspace(static_cast<unsigned char>(line[i]))) { i++; continue; }
-
-            // Line comments by language
-            if (is_line_comment_start(line, i)) { tokens.push_back({Token::COMMENT, i, n - i}); break; }
-
-            // Block comment start
-            if (is_block_comment_start(line, i)) {
-                size_t start = i; i += 2; bool closed = false;
-                while (i + 1 < n) { if (line[i] == '*' && line[i+1] == '/') { i += 2; closed = true; break; } i++; }
-                tokens.push_back({Token::COMMENT, start, i - start});
-                out_state.in_block_comment = !closed; continue;
-            }
-
-            // Preprocessor / directives (# for C-like, --- for YAML, headings for Markdown)
-            if (is_preprocessor_start(line, i)) { tokens.push_back({Token::PREPROCESSOR, i, n - i}); break; }
-
-            // Strings
-            if (line[i] == '"' || line[i] == '\'' || (language_ == Language::JavaScript && line[i] == '`')) {
-                char delim = static_cast<char>(line[i]);
-                size_t next = emit_string(i, delim); i = next; continue;
-            }
-
-            // Numbers
-            if (std::isdigit(static_cast<unsigned char>(line[i]))) {
-                size_t start = i; i++;
-                while (i < n && (std::isdigit(static_cast<unsigned char>(line[i])) || line[i]=='.' || line[i]=='x' || line[i]=='X' ||
-                                 line[i]=='f'||line[i]=='F'||line[i]=='u'||line[i]=='U'||line[i]=='l'||line[i]=='L')) { i++; }
-                tokens.push_back({Token::NUMBER, start, i - start});
-                continue;
-            }
-
-            // Identifiers / keywords
-            if (std::isalpha(static_cast<unsigned char>(line[i])) || line[i] == '_') {
-                size_t start = i; i++;
-                while (i < n && (std::isalnum(static_cast<unsigned char>(line[i])) || line[i] == '_')) i++;
-                std::string word = line.substr(start, i - start);
-                Token::Type type = (keywords_.count(word) > 0) ? Token::KEYWORD : Token::NORMAL;
-                tokens.push_back({type, start, i - start});
-                continue;
-            }
-
-            i++;
-        }
-        return tokens;
-    }
+    std::vector<Token> tokenize_line(const std::string& line, const LineState& in_state, LineState& out_state);
 
     // Backwards-compatible single-line tokenization (no cross-line state)
     std::vector<Token> tokenize_line(const std::string& line) {
         LineState s_in{}, s_out{}; return tokenize_line(line, s_in, s_out);
     }
 
-    // Optional: provide full document so TS can parse
-    void set_document_lines(const std::vector<std::string>& lines) {
-        if (ts_bridge_) ts_bridge_->set_document_text(lines);
-    }
-    // Optional: tell the highlighter which line number is being tokenized (for TS mapping)
-    void set_current_line_index(size_t line_index) { current_line_index_ = line_index; }
-
-    // Toggle whether to prefer Tree-sitter tokens when available
-    void set_prefer_treesitter(bool v) { prefer_ts_ = v; }
-    bool get_prefer_treesitter() const { return prefer_ts_; }
+    // Tree-sitter bridge removed for minimal build
     
 private:
     Language language_ = Language::Cpp;
     std::unordered_set<std::string> keywords_;
-    std::unique_ptr<TreeSitterBridge> ts_bridge_;
-    std::string ts_lang_id_;
-    size_t current_line_index_ = SIZE_MAX;
-    bool prefer_ts_ = true;
 
     bool is_line_comment_start(const std::string& line, size_t i) const {
         if (language_ == Language::Python || language_ == Language::YAML) return line[i] == '#';

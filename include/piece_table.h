@@ -49,6 +49,13 @@ public:
     // For rendering - get visible lines efficiently
     std::vector<std::string> get_lines_range(size_t start_line, size_t count) const;
     
+    // Batch insert: yhdistää useita insert-operaatioita yhdeksi
+    void batch_insert(const std::vector<std::pair<size_t, std::string>>& inserts) {
+        for (const auto& ins : inserts) {
+            insert(ins.first, ins.second);
+        }
+    }
+    
 private:
     std::vector<Piece> pieces_;
     std::string original_buffer_;
