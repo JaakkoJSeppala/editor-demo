@@ -98,27 +98,28 @@ Modern text editors struggle with large projects:
 
 ## ⚡ Velocity Editor USP & Benchmarkit
 
-**Ainutlaatuiset myyntiargumentit (USP):**
-- Erittäin nopea: O(1) insert/delete, virtuaalinen scrollaus, in-memory haku
-- Tuki miljoonien rivien tiedostoille ilman hidastumista
-- Kevyt plugin-arkkitehtuuri (WASM, helppo laajentaa)
-- Ei Electronia, ei DOM-pullonkauloja – natiivi C++/Win32/GTK/Cocoa
-- Pieni muistinkulutus ja nopea käynnistys
+**Unique Selling Points (USP):**
+- Extremely fast: O(1) insert/delete, virtual scrolling, in-memory search
+- Supports files with millions of lines without slowing down
+- Lightweight plugin architecture (WASM, easy to extend)
+- No Electron, no DOM bottlenecks – native C++/Win32/GTK/Cocoa
+- Low memory usage and fast startup
 
-**Benchmark-tulokset (editor_demo):**
 
-| Toiminto                | Tiedoston koko   | Velocity Editor | VS Code/Sublime | Nopeusero |
+**Benchmark Results (editor_demo):**
+
+| Operation               | File Size        | Velocity Editor | VS Code/Sublime | Speedup   |
 |-------------------------|------------------|-----------------|-----------------|-----------|
-| Dokumentin luonti       | 10,000 riviä     | 0.23 ms         | ~2-5 s          | 1000x     |
-| Insert (1000. merkki)   | 10,000 riviä     | 2 μs            | ~200 μs         | 100x      |
-| Delete (500 merkkiä)    | 10,000 riviä     | 3 μs            | ~150 μs         | 50x       |
-| Scrollaus (virtuaalinen)| 100,000 riviä    | 6 ms            | ~16 ms          | 2.5x      |
-| Haku (in-memory index)  | 3 tiedostoa      | 1 μs            | ~100 ms         | 100,000x  |
+| Document creation       | 10,000 lines     | 0.23 ms         | ~2-5 s          | 1000x     |
+| Insert (1000th char)    | 10,000 lines     | 2 μs            | ~200 μs         | 100x      |
+| Delete (500 chars)      | 10,000 lines     | 3 μs            | ~150 μs         | 50x       |
+| Scrolling (virtual)     | 100,000 lines    | 6 ms            | ~16 ms          | 2.5x      |
+| Search (in-memory index)| 3 files          | 1 μs            | ~100 ms         | 100,000x  |
 
-**Yhteenveto:**
-- Velocity Editor on suunniteltu suurille projekteille ja isoille tiedostoille.
-- Kaikki ydintoiminnot pysyvät nopeina riippumatta tiedoston koosta.
-- Web-pohjaiset editorit hidastuvat DOM:n ja GC:n vuoksi – Velocity käyttää natiivia koodia ja GPU:ta.
+**Summary:**
+- Velocity Editor is designed for large projects and big files.
+- All core operations remain fast regardless of file size.
+- Web-based editors slow down due to DOM and GC – Velocity uses native code and GPU.
 
 
 ## 🆕 Recent Changes (Nov 2025)
@@ -217,22 +218,24 @@ make -j$(sysctl -n hw.ncpu)
 
 ## 🚩 Quick Demo
 
-> *Demo-video tai GIF editorin käytöstä tulee tähän!*
-> 
-> Esimerkki: Avaa iso tiedosto, scrollaa, tee haku, näytä suorituskyky. Voit käyttää esim. OBS Studioa, ScreenToGifia tai PowerPointin tallennustyökalua. Tallenna video (MP4) tai GIF ja lisää se `docs/`-kansioon.
+
+> *A demo video or GIF of the editor in use will be added here!*
 >
-> Jos haluat lisätä demo-videon/GIF:n, tee pull request ja linkitä tiedosto tähän kohtaan.
+> Example: Open a large file, scroll, search, show performance. You can use e.g. OBS Studio, ScreenToGif, or PowerPoint's recording tool. Save the video (MP4) or GIF and add it to the `docs/` folder.
+>
+> If you want to add a demo video/GIF, make a pull request and link the file here.
 
 ![Demo GIF](docs/demo.gif)
 
 ## 📦 Pre-built Binary & Releases
 
-Lataa uusin versio helposti:
+
+Download the latest version easily:
 
 - [Releases & Pre-built Binary](https://github.com/yourusername/velocity-editor/releases)
 
-Windows: Lataa zip, pura ja aja `editor_gui.exe`
-Linux/macOS: Lataa ja pura, aja `./editor_gui`
+Windows: Download the zip, extract, and run `editor_gui.exe`
+Linux/macOS: Download and extract, run `./editor_gui`
 
 ## 🎮 Usage
 
@@ -405,13 +408,16 @@ We welcome contributions! Here's how you can help:
 
 # Velocity Editor CI/CD
 
-This repository uses GitHub Actions for automated build and test pipelines on Windows, Linux ja macOS.
+
+This repository uses GitHub Actions for automated build and test pipelines on Windows, Linux, and macOS.
 
 ### Build & Test
-- Jokainen push ja pull request käynnistää automaattisen buildin ja testin kaikilla alustoilla.
-- Artifaktit (pre-built binaryt) löytyvät GitHub Actionsin "Artifacts"-osiosta ja release-sivulta.
 
-### Testien ajaminen paikallisesti
+- Every push and pull request triggers an automatic build and test on all platforms.
+- Artifacts (pre-built binaries) can be found in the GitHub Actions "Artifacts" section and on the release page.
+
+
+### Running Tests Locally
 
 Windows:
 ```
@@ -429,9 +435,9 @@ cd build
 ./editor_demo
 ```
 
-### Testikattavuus
-- Testiohjelmat: editor_demo, plugin_test
-- Lisää testejä helposti src/test_main.cpp:aan
+### Test Coverage
+- Test programs: editor_demo, plugin_test
+- Easily add more tests to src/test_main.cpp
 
-### CI/CD workflow löytyy tiedostosta:
+### CI/CD workflow file:
 - `.github/workflows/build.yml`
